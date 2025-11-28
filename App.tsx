@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Shield, Lock, Unlock, Eye, Trash2, AlertTriangle, Terminal, FileCode, Loader2, FileText, FileLock, Github, Linkedin, Facebook, Globe, Code, Settings, RotateCcw, X, Clock, Copy, Check, Key, FileArchive, Fingerprint } from 'lucide-react';
+import { Shield, Lock, Unlock, Eye, Trash2, AlertTriangle, Terminal, FileCode, Loader2, FileText, FileLock, Github, Linkedin, Facebook, Globe, Code, Settings, RotateCcw, X, Clock, Copy, Check, Key, FileArchive, Fingerprint, Info } from 'lucide-react';
 import MatrixText from './components/MatrixText';
 import CyberButton from './components/CyberButton';
 import DropZone from './components/DropZone';
@@ -30,6 +30,7 @@ const App: React.FC = () => {
   const [duressMode, setDuressMode] = useState(false);
   const [showFakeSuccess, setShowFakeSuccess] = useState(false);
   const [showConfirmModal, setShowConfirmModal] = useState(false);
+  const [showAboutModal, setShowAboutModal] = useState(false);
   
   // Advanced Settings
   const [camouflageMode, setCamouflageMode] = useState(false);
@@ -119,6 +120,7 @@ const App: React.FC = () => {
         setLastOutput(null);
         setPasswordStrength(0);
         setShowConfirmModal(false);
+        setShowAboutModal(false);
         addLog('WARNING: SESSION TIMEOUT. SECURE DATA CLEARED.');
         playSound('error');
     };
@@ -430,9 +432,6 @@ const App: React.FC = () => {
 
           if (version === 1) {
              usedAlgo = 'AES-GCM'; // V1 assumes GCM
-             // Legacy V1 (Magic 6, Ver 1, Algo 1, Salt 16) -> Wait, previous code was slightly different?
-             // Previous code: [Magic 6] [Ver 1] [Algo 1] [Salt 16] = 24 bytes
-             // This matches.
              const algoId = headerView[7];
              usedAlgo = algoId === 2 ? 'AES-CBC' : 'AES-GCM';
              salt = headerView.slice(8, 24);
@@ -745,20 +744,30 @@ const App: React.FC = () => {
                 <span className="font-bold tracking-widest text-sm">VORTEX SHIELD <span className="text-[10px] opacity-70">ULTIMATE_EDITION_V3.1</span></span>
             </div>
             
-            {resumeAvailable && (
+            <div className="flex items-center gap-2">
+                {resumeAvailable && (
+                    <button 
+                        onClick={handleResumeSession}
+                        className="flex items-center gap-1 text-[10px] bg-[#00E5FF] bg-opacity-10 text-[#00E5FF] px-2 py-1 rounded border border-[#00E5FF] border-opacity-30 hover:bg-[#00E5FF] hover:bg-opacity-20 transition-colors animate-pulse"
+                    >
+                        <RotateCcw className="w-3 h-3" />
+                        RESUME
+                    </button>
+                )}
+                
                 <button 
-                    onClick={handleResumeSession}
-                    className="flex items-center gap-1 text-[10px] bg-[#00E5FF] bg-opacity-10 text-[#00E5FF] px-2 py-1 rounded border border-[#00E5FF] border-opacity-30 hover:bg-[#00E5FF] hover:bg-opacity-20 transition-colors animate-pulse"
+                    onClick={() => setShowAboutModal(true)}
+                    className="p-1.5 text-[#00E5FF] hover:bg-[#00E5FF] hover:bg-opacity-20 rounded transition-colors"
+                    title="System Information"
                 >
-                    <RotateCcw className="w-3 h-3" />
-                    RESUME_SESSION
+                    <Info className="w-4 h-4" />
                 </button>
-            )}
 
-            <div className="flex gap-2">
-                <div className="w-3 h-3 rounded-full bg-yellow-500/50"></div>
-                <div className="w-3 h-3 rounded-full bg-green-500/50"></div>
-                <div className="w-3 h-3 rounded-full bg-red-500/50"></div>
+                <div className="flex gap-2 ml-2">
+                    <div className="w-3 h-3 rounded-full bg-yellow-500/50"></div>
+                    <div className="w-3 h-3 rounded-full bg-green-500/50"></div>
+                    <div className="w-3 h-3 rounded-full bg-red-500/50"></div>
+                </div>
             </div>
         </div>
 
@@ -1138,6 +1147,72 @@ const App: React.FC = () => {
                             </button>
                         </div>
                      </div>
+                </div>
+            </div>
+        )}
+
+        {/* About Modal */}
+        {showAboutModal && (
+            <div className="absolute inset-0 z-50 bg-black/90 backdrop-blur-sm flex items-center justify-center p-6 animate-in fade-in duration-200">
+                <div className="bg-[#0a0a0a] border border-[#00E5FF] border-opacity-30 shadow-[0_0_50px_rgba(0,229,255,0.1)] max-w-lg w-full relative overflow-hidden flex flex-col max-h-[80vh]">
+                    {/* Header */}
+                    <div className="flex justify-between items-center p-4 border-b border-[#00E5FF] border-opacity-20 bg-[#00E5FF] bg-opacity-5">
+                        <h3 className="text-[#00E5FF] font-bold tracking-widest flex items-center gap-2">
+                            <Shield className="w-4 h-4" /> SYSTEM_INFO
+                        </h3>
+                        <button onClick={() => setShowAboutModal(false)} className="text-gray-500 hover:text-[#00E5FF] transition-colors">
+                            <X className="w-5 h-5" />
+                        </button>
+                    </div>
+                    
+                    {/* Content */}
+                    <div className="p-6 overflow-y-auto space-y-6 text-sm">
+                        <div>
+                            <h4 className="text-[#00E5FF] font-bold mb-2 text-xs uppercase tracking-wider border-l-2 border-[#00E5FF] pl-2">Vortex Shield: Web Edition</h4>
+                            <p className="text-gray-400 leading-relaxed text-xs">
+                                A military-grade, browser-based encryption suite designed for secure data handling without server-side exposure. All cryptographic operations occur locally within your browser's memory using standard Web Crypto APIs.
+                            </p>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-4">
+                             <div>
+                                <h4 className="text-gray-300 font-bold mb-2 text-[10px] uppercase tracking-wider">Core Protocols</h4>
+                                <ul className="text-gray-500 space-y-1 list-disc list-inside text-[10px]">
+                                    <li>AES-256-GCM / CBC</li>
+                                    <li>PBKDF2 Key Derivation</li>
+                                    <li>SHA-256 Integrity Hashing</li>
+                                    <li>GZIP Compression</li>
+                                </ul>
+                             </div>
+                             <div>
+                                <h4 className="text-gray-300 font-bold mb-2 text-[10px] uppercase tracking-wider">Stealth Features</h4>
+                                <ul className="text-gray-500 space-y-1 list-disc list-inside text-[10px]">
+                                    <li>Steganography (Image Hiding)</li>
+                                    <li>Camouflage Mode (Fake Ext)</li>
+                                    <li>DoD 5220.22-M Incinerator</li>
+                                    <li>Panic / Duress Mode</li>
+                                </ul>
+                             </div>
+                        </div>
+
+                        <div>
+                            <h4 className="text-[#00E5FF] font-bold mb-2 text-xs uppercase tracking-wider border-l-2 border-[#00E5FF] pl-2">Usage Protocols</h4>
+                            <div className="space-y-3">
+                                <div className="bg-[#00E5FF] bg-opacity-5 p-3 rounded border border-[#00E5FF] border-opacity-10">
+                                    <strong className="text-gray-300 block text-xs mb-1">ENCRYPTION</strong>
+                                    <p className="text-gray-500 text-[10px]">Select files -> Choose Algorithm -> Enter Strong Password -> (Optional) Add Keyfile/Compression -> Activate Shield.</p>
+                                </div>
+                                <div className="bg-[#00E5FF] bg-opacity-5 p-3 rounded border border-[#00E5FF] border-opacity-10">
+                                    <strong className="text-gray-300 block text-xs mb-1">DECRYPTION</strong>
+                                    <p className="text-gray-500 text-[10px]">Select Encrypted File (.vortex) -> Enter Original Password -> (Required) Upload Keyfile if used -> Unlock Vault.</p>
+                                </div>
+                            </div>
+                        </div>
+                        
+                         <div className="text-center pt-4 border-t border-gray-800">
+                            <p className="text-[10px] text-gray-600">VERSION 3.1.0 // BUILD 2024.10.27</p>
+                         </div>
+                    </div>
                 </div>
             </div>
         )}

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Shield, Lock, Unlock, Eye, Trash2, Cpu, AlertTriangle, Menu, X, Terminal, FileCode, Loader2, FileText, FileLock } from 'lucide-react';
+import { Shield, Lock, Unlock, Eye, Trash2, Cpu, AlertTriangle, Menu, X, Terminal, FileCode, Loader2, FileText, FileLock, Github, Linkedin, Facebook, Globe, Code } from 'lucide-react';
 import MatrixText from './components/MatrixText';
 import CyberButton from './components/CyberButton';
 import DropZone from './components/DropZone';
@@ -270,7 +270,7 @@ const App: React.FC = () => {
       }}></div>
 
       {/* Main Window */}
-      <div className="w-full max-w-2xl bg-[#0a0a0a] border border-[#00E5FF]/30 shadow-[0_0_50px_rgba(0,229,255,0.1)] rounded-sm relative overflow-hidden backdrop-blur-md">
+      <div className="w-full max-w-2xl bg-[#0a0a0a] border border-[#00E5FF]/30 shadow-[0_0_50px_rgba(0,229,255,0.1)] rounded-sm relative overflow-hidden backdrop-blur-md z-20">
         
         {/* Header Bar */}
         <div className="bg-[#00E5FF]/10 p-3 flex justify-between items-center border-b border-[#00E5FF]/20 select-none">
@@ -539,8 +539,39 @@ const App: React.FC = () => {
       </div>
       
       {/* Footer Decoration */}
-      <div className="mt-4 text-[10px] text-gray-600 tracking-[0.2em] animate-pulse">
+      <div className="mt-4 text-[10px] text-gray-600 tracking-[0.2em] animate-pulse mb-8">
           SECURE CONNECTION ESTABLISHED // NODE_ID: 8X-99
+      </div>
+
+      {/* Developer Footer */}
+      <div className="mt-4 flex flex-col items-center gap-5 relative z-10 animate-in fade-in slide-in-from-bottom-8 duration-1000">
+          <div className="relative group cursor-default">
+              <div className="absolute -inset-1 bg-gradient-to-r from-[#00E5FF] to-[#ff00c1] rounded blur opacity-20 group-hover:opacity-60 transition duration-500"></div>
+              <div className="relative px-5 py-2 bg-black/80 ring-1 ring-[#00E5FF]/20 rounded flex items-center gap-3 backdrop-blur-sm transition-transform group-hover:-translate-y-0.5">
+                 <Code className="w-4 h-4 text-[#00E5FF] animate-pulse" />
+                 <span className="text-xs font-mono text-[#00E5FF] tracking-widest cyber-glitch font-bold" data-text="ZAHID HASAN TONMOY">ZAHID HASAN TONMOY</span>
+              </div>
+          </div>
+          
+          <div className="flex items-center gap-6">
+             {[
+                 { icon: Facebook, href: "https://www.facebook.com/zahidhasantonmoybd", color: "hover:text-blue-500" },
+                 { icon: Linkedin, href: "https://www.linkedin.com/in/zahidhasantonmoy/", color: "hover:text-blue-400" },
+                 { icon: Github, href: "https://github.com/zahidhasantonmoy", color: "hover:text-purple-500" },
+                 { icon: Globe, href: "https://zahidhasantonmoy.vercel.app", color: "hover:text-[#00E5FF]" }
+             ].map((item, idx) => (
+                <a 
+                    key={idx} 
+                    href={item.href} 
+                    target="_blank" 
+                    rel="noopener noreferrer"
+                    className={`text-gray-600 transition-all duration-300 transform hover:scale-125 ${item.color} relative group`}
+                >
+                    <span className="absolute -inset-2 bg-white/10 rounded-full blur opacity-0 group-hover:opacity-100 transition-opacity"></span>
+                    <item.icon className="w-5 h-5 relative z-10" />
+                </a>
+             ))}
+          </div>
       </div>
     </div>
   );

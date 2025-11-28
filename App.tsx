@@ -57,7 +57,7 @@ const App: React.FC = () => {
         try {
             const parsed = JSON.parse(savedState);
             // Check if there is valid state to resume
-            if (parsed.mode || parsed.algorithm) {
+            if (parsed.mode || parsed.algorithm || parsed.password) {
                 setResumeAvailable(true);
             }
         } catch (e) {
@@ -66,18 +66,38 @@ const App: React.FC = () => {
     }
   }, []);
 
-  // 3. Save State to LocalStorage
+  // 3. Save State Logic
+  // We use a Ref to hold current state for the interval closure
+  const stateRef = useRef({ mode, file, password, algorithm, camouflageMode, camouflageExt });
+  
   useEffect(() => {
+    stateRef.current = { mode, file, password, algorithm, camouflageMode, camouflageExt };
+  }, [mode, file, password, algorithm, camouflageMode, camouflageExt]);
+
+  const saveCurrentState = () => {
+      const s = stateRef.current;
       const stateToSave = {
-          mode,
-          algorithm,
-          camouflageMode,
-          camouflageExt,
-          fileDetails: file ? { name: file.name, size: file.size } : null,
+          mode: s.mode,
+          algorithm: s.algorithm,
+          camouflageMode: s.camouflageMode,
+          camouflageExt: s.camouflageExt,
+          fileDetails: s.file ? { name: s.file.name, size: s.file.size } : null,
+          password: s.password, // Save password input status for resume convenience
           timestamp: Date.now()
       };
       localStorage.setItem(STORAGE_KEY, JSON.stringify(stateToSave));
-  }, [mode, algorithm, camouflageMode, camouflageExt, file]);
+  };
+
+  // 3a. Save on User Actions (Dependency Change)
+  useEffect(() => {
+      saveCurrentState();
+  }, [mode, algorithm, camouflageMode, camouflageExt, file, password]);
+
+  // 3b. Save on Regular Intervals (30s heartbeat)
+  useEffect(() => {
+      const interval = setInterval(saveCurrentState, 30000);
+      return () => clearInterval(interval);
+  }, []);
 
   // 4. Auto-scroll logs
   useEffect(() => {
@@ -135,6 +155,7 @@ const App: React.FC = () => {
               if (parsed.algorithm) setAlgorithm(parsed.algorithm);
               if (parsed.camouflageMode !== undefined) setCamouflageMode(parsed.camouflageMode);
               if (parsed.camouflageExt) setCamouflageExt(parsed.camouflageExt);
+              if (parsed.password) setPassword(parsed.password);
               
               setResumeAvailable(false);
               addLog('> SESSION SETTINGS RESTORED');

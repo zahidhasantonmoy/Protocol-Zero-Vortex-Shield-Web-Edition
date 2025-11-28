@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Shield, Lock, Unlock, Eye, Trash2, AlertTriangle, Terminal, FileCode, Loader2, FileText, FileLock, Github, Linkedin, Facebook, Globe, Code, Settings, RotateCcw, X, Clock } from 'lucide-react';
+import { Shield, Lock, Unlock, Eye, Trash2, AlertTriangle, Terminal, FileCode, Loader2, FileText, FileLock, Github, Linkedin, Facebook, Globe, Code, Settings, RotateCcw, X, Clock, Copy, Check } from 'lucide-react';
 import MatrixText from './components/MatrixText';
 import CyberButton from './components/CyberButton';
 import DropZone from './components/DropZone';
@@ -36,6 +36,11 @@ const App: React.FC = () => {
   const [camouflageExt, setCamouflageExt] = useState('.dll');
   const [algorithm, setAlgorithm] = useState<CryptoAlgorithm>('AES-GCM');
   const [resumeAvailable, setResumeAvailable] = useState(false);
+
+  // New Features State
+  const [passwordStrength, setPasswordStrength] = useState(0);
+  const [lastOutput, setLastOutput] = useState<string | null>(null);
+  const [copySuccess, setCopySuccess] = useState(false);
 
   const logEndRef = useRef<HTMLDivElement>(null);
   const inactivityTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -114,6 +119,8 @@ const App: React.FC = () => {
         setPassword('');
         setFile(null);
         setCoverImage(null);
+        setLastOutput(null);
+        setPasswordStrength(0);
         setShowConfirmModal(false);
         addLog('WARNING: SESSION TIMEOUT. SECURE DATA CLEARED.');
         playSound('error');
@@ -140,6 +147,32 @@ const App: React.FC = () => {
     };
   }, []); 
 
+  // --- Helpers ---
+  const calculateStrength = (pass: string) => {
+    if (!pass) return 0;
+    let score = 0;
+    if (pass.length >= 8) score++;
+    if (pass.length >= 12) score++;
+    if (/[A-Z]/.test(pass)) score++;
+    if (/[0-9]/.test(pass) || /[^A-Za-z0-9]/.test(pass)) score++;
+    return score;
+  };
+
+  const copyToClipboard = async () => {
+    if (lastOutput) {
+        try {
+            await navigator.clipboard.writeText(lastOutput);
+            setCopySuccess(true);
+            playSound('success');
+            setTimeout(() => setCopySuccess(false), 2000);
+            addLog('OUTPUT INFO COPIED TO CLIPBOARD');
+        } catch (err) {
+            addLog('ERROR: CLIPBOARD ACCESS DENIED');
+            playSound('error');
+        }
+    }
+  };
+
   // --- Handlers ---
 
   const handleResumeSession = () => {
@@ -151,7 +184,10 @@ const App: React.FC = () => {
               if (parsed.algorithm) setAlgorithm(parsed.algorithm);
               if (parsed.camouflageMode !== undefined) setCamouflageMode(parsed.camouflageMode);
               if (parsed.camouflageExt) setCamouflageExt(parsed.camouflageExt);
-              if (parsed.password) setPassword(parsed.password);
+              if (parsed.password) {
+                  setPassword(parsed.password);
+                  setPasswordStrength(calculateStrength(parsed.password));
+              }
               
               setResumeAvailable(false);
               addLog('> SESSION SETTINGS RESTORED');
@@ -172,6 +208,7 @@ const App: React.FC = () => {
   const handleFileSelect = (selectedFile: File) => {
       setIsScanning(true);
       setFile(null);
+      setLastOutput(null);
       addLog(`SCANNING FILE: ${selectedFile.name}...`);
       playSound('process');
       setTimeout(() => {
@@ -197,6 +234,7 @@ const App: React.FC = () => {
   const handlePasswordChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = e.target.value;
     setPassword(val);
+    setPasswordStrength(calculateStrength(val));
     if (val === 'panic') {
       triggerDuressMode();
     }
@@ -211,6 +249,7 @@ const App: React.FC = () => {
         setCoverImage(null);
         setMode(AppMode.DECRYPT);
         setPassword('');
+        setPasswordStrength(0);
     }, 1000);
   };
 
@@ -222,6 +261,7 @@ const App: React.FC = () => {
   const executeChunkedEncryption = async (inputFile: File, coverFile: File | null = null) => {
       setIsProcessing(true);
       setProgress(0);
+      setLastOutput(null);
       addLog('INITIALIZING CHUNKED ENCRYPTION ENGINE...');
 
       try {
@@ -294,6 +334,7 @@ const App: React.FC = () => {
           }
 
           downloadBlob(finalBlob, fileName);
+          setLastOutput(fileName);
           setProgress(100);
           addLog('OPERATION COMPLETE.');
           playSound('success');
@@ -310,6 +351,7 @@ const App: React.FC = () => {
   const executeChunkedDecryption = async (inputBlob: Blob, isStegano: boolean) => {
       setIsProcessing(true);
       setProgress(0);
+      setLastOutput(null);
       addLog('INITIALIZING DECRYPTION STREAM...');
 
       try {
@@ -397,6 +439,7 @@ const App: React.FC = () => {
           if (isStegano) dlName = "revealed_payload.bin";
 
           downloadBlob(finalBlob, dlName);
+          setLastOutput(dlName);
           setProgress(100);
           addLog('DECRYPTION SUCCESSFUL.');
           playSound('success');
@@ -468,6 +511,7 @@ const App: React.FC = () => {
       }
       addLog('FILE BUFFER PURGED.');
       setFile(null);
+      setLastOutput("DATA INCINERATED");
       setIsProcessing(false);
       playSound('success');
   };
@@ -515,7 +559,7 @@ const App: React.FC = () => {
     <div className="min-h-screen flex flex-col items-center justify-center p-4 relative">
       {/* Background Matrix Rain Effect */}
       <div className="absolute inset-0 pointer-events-none opacity-5" style={{ 
-          backgroundImage: 'linear-gradient(0deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent)',
+          backgroundImage: 'linear-gradient(0deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent)',
           backgroundSize: '50px 50px'
       }}></div>
 
@@ -562,6 +606,8 @@ const App: React.FC = () => {
                         setCoverImage(null);
                         setLog([]);
                         setPassword('');
+                        setPasswordStrength(0);
+                        setLastOutput(null);
                         setShowConfirmModal(false);
                         addLog(`SWITCHING MODE TO ${item.id}...`);
                     }}
@@ -657,6 +703,29 @@ const App: React.FC = () => {
                     <div className="absolute right-3 top-8 text-[#00E5FF]/30">
                         <Lock className="w-4 h-4" />
                     </div>
+                    
+                    {/* Password Strength Meter */}
+                    <div className="mt-2 flex items-center justify-between">
+                        <div className="flex gap-1 h-1 flex-1 max-w-[150px]">
+                             {[1,2,3,4].map((level) => (
+                                 <div 
+                                    key={level} 
+                                    className={`flex-1 h-full rounded-sm transition-all duration-300 ${
+                                        passwordStrength >= level 
+                                        ? level === 1 ? 'bg-red-500' : level === 2 ? 'bg-orange-500' : level === 3 ? 'bg-yellow-400' : 'bg-green-500'
+                                        : 'bg-gray-800'
+                                    }`}
+                                 ></div>
+                             ))}
+                        </div>
+                        <div className="text-[10px] font-bold tracking-wider uppercase">
+                            {passwordStrength === 0 ? <span className="text-gray-600">ENTER KEY</span> :
+                             passwordStrength === 1 ? <span className="text-red-500">WEAK</span> :
+                             passwordStrength === 2 ? <span className="text-orange-500">MODERATE</span> :
+                             passwordStrength === 3 ? <span className="text-yellow-400">GOOD</span> :
+                             <span className="text-green-500">STRONG</span>}
+                        </div>
+                    </div>
                 </div>
             )}
 
@@ -711,58 +780,77 @@ const App: React.FC = () => {
             )}
 
             {/* Actions */}
-            <div className="flex justify-end items-center gap-4 pt-4 border-t border-[#00E5FF]/10">
-                {(isProcessing || isScanning) && (
-                    <div className="flex items-center gap-2 text-[#00E5FF] animate-pulse">
-                        <Loader2 className="w-4 h-4 animate-spin" />
-                        <span className="text-xs font-mono">
-                            {isScanning ? 'SCANNING_SOURCE...' : 'PROCESSING_DATA_STREAM...'}
-                        </span>
+            <div className="flex flex-col gap-4">
+                {/* Last Output / Copy Bar */}
+                {lastOutput && (
+                    <div className="bg-[#00E5FF]/10 border border-[#00E5FF]/30 p-2 rounded flex items-center justify-between animate-in fade-in slide-in-from-top-2">
+                        <div className="flex items-center gap-2 overflow-hidden">
+                            <Check className="w-4 h-4 text-[#00E5FF] shrink-0" />
+                            <span className="text-xs font-mono text-[#00E5FF] truncate">{lastOutput}</span>
+                        </div>
+                        <button 
+                            onClick={copyToClipboard}
+                            className={`p-1.5 rounded transition-all shrink-0 ${copySuccess ? 'bg-green-500 text-black' : 'hover:bg-[#00E5FF]/20 text-[#00E5FF]'}`}
+                            title="Copy to Clipboard"
+                        >
+                            {copySuccess ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                        </button>
                     </div>
                 )}
 
-                {mode === AppMode.ENCRYPT && (
-                    <CyberButton 
-                        label={isProcessing ? "ENCRYPTING..." : "ACTIVATE SHIELD"} 
-                        onClick={handleEncrypt} 
-                        disabled={!file || !password || isProcessing || isScanning} 
-                        isLoading={isProcessing}
-                    />
-                )}
-                {mode === AppMode.DECRYPT && (
-                    <CyberButton 
-                        label={isProcessing ? "DECRYPTING..." : "UNLOCK VAULT"} 
-                        onClick={handleDecrypt}
-                        disabled={!file || !password || isProcessing || isScanning}
-                        isLoading={isProcessing}
-                    />
-                )}
-                {mode === AppMode.STEGANO && (
-                     <div className="flex gap-2">
-                         <CyberButton 
-                            label="EXTRACT" 
-                            variant="ghost"
-                            onClick={handleSteganoDecrypt}
+                <div className="flex justify-end items-center gap-4 pt-4 border-t border-[#00E5FF]/10">
+                    {(isProcessing || isScanning) && (
+                        <div className="flex items-center gap-2 text-[#00E5FF] animate-pulse">
+                            <Loader2 className="w-4 h-4 animate-spin" />
+                            <span className="text-xs font-mono">
+                                {isScanning ? 'SCANNING_SOURCE...' : 'PROCESSING_DATA_STREAM...'}
+                            </span>
+                        </div>
+                    )}
+
+                    {mode === AppMode.ENCRYPT && (
+                        <CyberButton 
+                            label={isProcessing ? "ENCRYPTING..." : "ACTIVATE SHIELD"} 
+                            onClick={handleEncrypt} 
+                            disabled={!file || !password || isProcessing || isScanning} 
+                            isLoading={isProcessing}
+                        />
+                    )}
+                    {mode === AppMode.DECRYPT && (
+                        <CyberButton 
+                            label={isProcessing ? "DECRYPTING..." : "UNLOCK VAULT"} 
+                            onClick={handleDecrypt}
                             disabled={!file || !password || isProcessing || isScanning}
                             isLoading={isProcessing}
                         />
-                         <CyberButton 
-                            label="EMBED" 
-                            onClick={handleStegano}
-                            disabled={!file || !coverImage || !password || isProcessing || isScanning}
+                    )}
+                    {mode === AppMode.STEGANO && (
+                         <div className="flex gap-2">
+                             <CyberButton 
+                                label="EXTRACT" 
+                                variant="ghost"
+                                onClick={handleSteganoDecrypt}
+                                disabled={!file || !password || isProcessing || isScanning}
+                                isLoading={isProcessing}
+                            />
+                             <CyberButton 
+                                label="EMBED" 
+                                onClick={handleStegano}
+                                disabled={!file || !coverImage || !password || isProcessing || isScanning}
+                                isLoading={isProcessing}
+                            />
+                         </div>
+                    )}
+                    {mode === AppMode.INCINERATOR && (
+                        <CyberButton 
+                            label={isProcessing ? "PURGING..." : "INCINERATE DATA"} 
+                            variant="danger" 
+                            onClick={handleIncinerateClick}
+                            disabled={!file || isProcessing || isScanning}
                             isLoading={isProcessing}
                         />
-                     </div>
-                )}
-                {mode === AppMode.INCINERATOR && (
-                    <CyberButton 
-                        label={isProcessing ? "PURGING..." : "INCINERATE DATA"} 
-                        variant="danger" 
-                        onClick={handleIncinerateClick}
-                        disabled={!file || isProcessing || isScanning}
-                        isLoading={isProcessing}
-                    />
-                )}
+                    )}
+                </div>
             </div>
         </div>
 

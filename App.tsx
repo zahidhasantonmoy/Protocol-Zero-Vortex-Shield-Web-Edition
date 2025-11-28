@@ -1,9 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Shield, Lock, Unlock, Eye, Trash2, AlertTriangle, Terminal, FileCode, Loader2, FileText, FileLock, Github, Linkedin, Facebook, Globe, Code, Settings, RotateCcw, X, Clock, Copy, Check } from 'lucide-react';
+import { Shield, Lock, Unlock, Eye, Trash2, AlertTriangle, Terminal, FileCode, Loader2, FileText, FileLock, Github, Linkedin, Facebook, Globe, Code, Settings, RotateCcw, X, Clock, Copy, Check, Key, FileArchive, Fingerprint } from 'lucide-react';
 import MatrixText from './components/MatrixText';
 import CyberButton from './components/CyberButton';
 import DropZone from './components/DropZone';
-import { deriveMasterKey, encryptChunk, decryptChunk, findDelimiterIndex, STEGANO_DELIMITER, CryptoAlgorithm } from './utils/crypto';
+import { deriveMasterKey, encryptChunk, decryptChunk, findDelimiterIndex, STEGANO_DELIMITER, CryptoAlgorithm, compressBuffer, decompressBuffer, hashData, hashBufferRaw } from './utils/crypto';
 import { playSound } from './utils/audio';
 
 enum AppMode {
@@ -26,7 +26,7 @@ const App: React.FC = () => {
   const [isProcessing, setIsProcessing] = useState(false);
   const [isScanning, setIsScanning] = useState(false);
   const [progress, setProgress] = useState(0);
-  const [log, setLog] = useState<string[]>(['> SYSTEM INITIALIZED', '> VORTEX SHIELD v3.0 ONLINE']);
+  const [log, setLog] = useState<string[]>(['> SYSTEM INITIALIZED', '> VORTEX SHIELD v3.1 ONLINE']);
   const [duressMode, setDuressMode] = useState(false);
   const [showFakeSuccess, setShowFakeSuccess] = useState(false);
   const [showConfirmModal, setShowConfirmModal] = useState(false);
@@ -36,8 +36,12 @@ const App: React.FC = () => {
   const [camouflageExt, setCamouflageExt] = useState('.dll');
   const [algorithm, setAlgorithm] = useState<CryptoAlgorithm>('AES-GCM');
   const [resumeAvailable, setResumeAvailable] = useState(false);
+  
+  // New Features
+  const [keyFile, setKeyFile] = useState<File | null>(null);
+  const [keyFileHash, setKeyFileHash] = useState<string>('');
+  const [useCompression, setUseCompression] = useState(false);
 
-  // New Features State
   const [passwordStrength, setPasswordStrength] = useState(0);
   const [lastOutput, setLastOutput] = useState<string | null>(null);
   const [copySuccess, setCopySuccess] = useState(false);
@@ -51,18 +55,16 @@ const App: React.FC = () => {
 
   // --- Effects ---
 
-  // 1. Sync isProcessing state to ref for timer checks
   useEffect(() => {
     processingRef.current = isProcessing;
   }, [isProcessing]);
 
-  // 2. Load State from LocalStorage
+  // Load State
   useEffect(() => {
     const savedState = localStorage.getItem(STORAGE_KEY);
     if (savedState) {
         try {
             const parsed = JSON.parse(savedState);
-            // Check if there is valid state to resume
             if (parsed.mode || parsed.algorithm || parsed.password) {
                 setResumeAvailable(true);
             }
@@ -72,12 +74,12 @@ const App: React.FC = () => {
     }
   }, []);
 
-  // 3. Save State Logic
-  const stateRef = useRef({ mode, files, password, algorithm, camouflageMode, camouflageExt });
+  // Save State
+  const stateRef = useRef({ mode, files, password, algorithm, camouflageMode, camouflageExt, useCompression });
   
   useEffect(() => {
-    stateRef.current = { mode, files, password, algorithm, camouflageMode, camouflageExt };
-  }, [mode, files, password, algorithm, camouflageMode, camouflageExt]);
+    stateRef.current = { mode, files, password, algorithm, camouflageMode, camouflageExt, useCompression };
+  }, [mode, files, password, algorithm, camouflageMode, camouflageExt, useCompression]);
 
   const saveCurrentState = () => {
       const s = stateRef.current;
@@ -86,6 +88,7 @@ const App: React.FC = () => {
           algorithm: s.algorithm,
           camouflageMode: s.camouflageMode,
           camouflageExt: s.camouflageExt,
+          useCompression: s.useCompression,
           filesDetails: s.files.map(f => ({ name: f.name, size: f.size })),
           password: s.password, 
           timestamp: Date.now()
@@ -93,33 +96,25 @@ const App: React.FC = () => {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(stateToSave));
   };
 
-  // 3a. Save on User Actions
-  useEffect(() => {
-      saveCurrentState();
-  }, [mode, algorithm, camouflageMode, camouflageExt, files, password]);
-
-  // 3b. Save on Regular Intervals
+  useEffect(() => { saveCurrentState(); }, [mode, algorithm, camouflageMode, camouflageExt, files, password, useCompression]);
   useEffect(() => {
       const interval = setInterval(saveCurrentState, 30000);
       return () => clearInterval(interval);
   }, []);
 
-  // 4. Auto-scroll logs
   useEffect(() => {
     logEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [log]);
 
-  // 5. Inactivity Timer
+  // Inactivity
   useEffect(() => {
     const handleInactivityTimeout = () => {
-        // Prevent timeout if strictly processing data
-        if (processingRef.current) {
-            resetTimer(true); 
-            return; 
-        }
+        if (processingRef.current) { resetTimer(true); return; }
         
         setPassword('');
         setFiles([]);
+        setKeyFile(null);
+        setKeyFileHash('');
         setCoverImage(null);
         setLastOutput(null);
         setPasswordStrength(0);
@@ -130,9 +125,7 @@ const App: React.FC = () => {
 
     const resetTimer = (force = false) => {
         const now = Date.now();
-        // Performance optimization: Throttle reset calls to max once per second
         if (!force && now - lastActivityRef.current < 1000) return;
-        
         lastActivityRef.current = now;
         if (inactivityTimerRef.current) clearTimeout(inactivityTimerRef.current);
         inactivityTimerRef.current = setTimeout(handleInactivityTimeout, INACTIVITY_LIMIT_MS);
@@ -180,6 +173,32 @@ const App: React.FC = () => {
     }
   };
 
+  const handleKeyFileSelect = async (selectedFiles: File[]) => {
+      if (selectedFiles.length > 0) {
+          const kf = selectedFiles[0];
+          setKeyFile(kf);
+          addLog(`KEY FILE LOADED: ${kf.name}`);
+          
+          // Hash Keyfile
+          try {
+             // For large keyfiles, reading into RAM is bad, but keyfiles are usually small.
+             // We'll support up to 64MB keyfiles for now to match chunk size.
+             if (kf.size > CHUNK_SIZE) {
+                 addLog('WARNING: KEY FILE TOO LARGE (>64MB). USING FIRST 64MB ONLY.');
+             }
+             const slice = kf.slice(0, Math.min(kf.size, CHUNK_SIZE));
+             const buffer = await slice.arrayBuffer();
+             const hash = await hashData(buffer);
+             setKeyFileHash(hash);
+             addLog(`KEY HASH: ${hash.substring(0, 16)}...`);
+             playSound('success');
+          } catch (e) {
+              addLog('ERROR PROCESSING KEY FILE');
+              playSound('error');
+          }
+      }
+  };
+
   // --- Handlers ---
 
   const handleResumeSession = () => {
@@ -191,6 +210,7 @@ const App: React.FC = () => {
               if (parsed.algorithm) setAlgorithm(parsed.algorithm);
               if (parsed.camouflageMode !== undefined) setCamouflageMode(parsed.camouflageMode);
               if (parsed.camouflageExt) setCamouflageExt(parsed.camouflageExt);
+              if (parsed.useCompression !== undefined) setUseCompression(parsed.useCompression);
               if (parsed.password) {
                   setPassword(parsed.password);
                   setPasswordStrength(calculateStrength(parsed.password));
@@ -255,6 +275,7 @@ const App: React.FC = () => {
     addLog('ENGAGING DECOY PROTOCOLS...');
     setTimeout(() => {
         setFiles([]);
+        setKeyFile(null);
         setCoverImage(null);
         setMode(AppMode.DECRYPT);
         setPassword('');
@@ -263,21 +284,24 @@ const App: React.FC = () => {
   };
 
   // HEADER CONSTANTS
-  const VORTEX_MAGIC = "VORTEX"; // 6 bytes
-  const VERSION = 1;
+  const VORTEX_MAGIC = "VORTEX"; 
+  const VERSION = 2; // Bumped to 2 for Options support
 
   // --- CORE CHUNKED ENCRYPTION LOGIC ---
   const executeChunkedEncryption = async (inputFile: File, coverFile: File | null = null) => {
       setProgress(0);
       setLastOutput(null);
+      
+      const chunkHashes: string[] = [];
 
       try {
           const salt = window.crypto.getRandomValues(new Uint8Array(16));
-          const key = await deriveMasterKey(password, salt, algorithm);
+          // Derive key using Password AND KeyFileHash
+          const key = await deriveMasterKey(password, salt, algorithm, keyFileHash || undefined);
           
           const blobParts: (Blob | ArrayBuffer | Uint8Array)[] = [];
           
-          // 1. If Stegano, Append Cover Image + Delimiter first
+          // 1. If Stegano
           if (coverFile) {
               blobParts.push(coverFile);
               const encoder = new TextEncoder();
@@ -285,23 +309,41 @@ const App: React.FC = () => {
           }
 
           // 2. Add Global Header
+          // Format: [Magic(6)] [Ver(1)=2] [Algo(1)] [Options(1)] [Salt(16)]
           const encoder = new TextEncoder();
           const magicBytes = encoder.encode(VORTEX_MAGIC);
           const versionByte = new Uint8Array([VERSION]);
           const algoByte = new Uint8Array([algorithm === 'AES-GCM' ? 1 : 2]); 
           
-          blobParts.push(magicBytes, versionByte, algoByte, salt);
+          // Options Byte: Bit 0 = Compression, Bit 1 = KeyFile Used
+          let optionsVal = 0;
+          if (useCompression) optionsVal |= 1;
+          if (keyFileHash) optionsVal |= 2;
+          const optionsByte = new Uint8Array([optionsVal]);
+
+          blobParts.push(magicBytes, versionByte, algoByte, optionsByte, salt);
 
           // 3. Process File Chunks
           const totalSize = inputFile.size;
           let offset = 0;
-          let chunkIndex = 0;
+
+          addLog('STREAMING ENCRYPTION STARTED...');
 
           while (offset < totalSize) {
               const slice = inputFile.slice(offset, offset + CHUNK_SIZE);
-              const chunkBuffer = await slice.arrayBuffer();
+              const chunkRawBuffer = await slice.arrayBuffer();
+
+              // Integrity: Hash the original chunk
+              const chunkHash = await hashData(chunkRawBuffer);
+              chunkHashes.push(chunkHash);
+
+              // Compression (if enabled)
+              let processedChunk = chunkRawBuffer;
+              if (useCompression) {
+                  processedChunk = await compressBuffer(chunkRawBuffer);
+              }
               
-              const { encrypted, iv } = await encryptChunk(chunkBuffer, key, algorithm);
+              const { encrypted, iv } = await encryptChunk(processedChunk, key, algorithm);
               
               const lenBuffer = new DataView(new ArrayBuffer(4));
               lenBuffer.setUint32(0, encrypted.byteLength, false);
@@ -311,12 +353,17 @@ const App: React.FC = () => {
               blobParts.push(encrypted);
 
               offset += CHUNK_SIZE;
-              chunkIndex++;
               const percent = Math.min(99, Math.round((offset / totalSize) * 100));
               setProgress(percent);
               
               await new Promise(r => setTimeout(r, 0));
           }
+
+          // Calculate Merkle Root / Master Hash
+          const masterHashBuffer = await hashBufferRaw(new TextEncoder().encode(chunkHashes.join('')));
+          const masterHashHex = Array.from(new Uint8Array(masterHashBuffer)).map(b => b.toString(16).padStart(2,'0')).join('');
+          
+          addLog(`SOURCE INTEGRITY HASH: ${masterHashHex.substring(0, 16)}...`);
 
           // 4. Finalize
           const finalBlob = new Blob(blobParts, { type: coverFile ? 'image/png' : 'application/octet-stream' });
@@ -344,9 +391,10 @@ const App: React.FC = () => {
   const executeChunkedDecryption = async (inputBlob: Blob, isStegano: boolean, originalName: string) => {
       setProgress(0);
       setLastOutput(null);
+      const chunkHashes: string[] = [];
 
       try {
-          // 1. Locate Payload Start
+          // 1. Locate Payload
           let payloadOffset = 0;
           if (isStegano) {
               const scanSize = Math.min(inputBlob.size, 50 * 1024 * 1024);
@@ -355,37 +403,63 @@ const App: React.FC = () => {
               const delimiterBytes = new TextEncoder().encode(STEGANO_DELIMITER);
               
               const delimiterIdx = findDelimiterIndex(scanUint8, delimiterBytes);
-              
-              if (delimiterIdx === -1) {
-                  throw new Error("NO STEGANOGRAPHY PAYLOAD FOUND");
-              }
+              if (delimiterIdx === -1) throw new Error("NO STEGANOGRAPHY PAYLOAD FOUND");
               payloadOffset = delimiterIdx + delimiterBytes.length;
           }
 
           // 2. Read Global Header
-          const headerSize = 24;
-          const headerSlice = inputBlob.slice(payloadOffset, payloadOffset + headerSize);
+          // V1: 24 bytes, V2: 25 bytes
+          // We read enough for V2 first
+          const maxHeader = 25;
+          const headerSlice = inputBlob.slice(payloadOffset, payloadOffset + maxHeader);
           const headerBuffer = await headerSlice.arrayBuffer();
           const headerView = new Uint8Array(headerBuffer);
           const encoder = new TextEncoder();
           const magicBytes = encoder.encode(VORTEX_MAGIC);
 
           for(let i=0; i<magicBytes.length; i++) {
-              if (headerView[i] !== magicBytes[i]) {
-                  throw new Error("INVALID FILE FORMAT OR HEADER");
-              }
+              if (headerView[i] !== magicBytes[i]) throw new Error("INVALID FILE FORMAT");
           }
 
-          const algoId = headerView[7];
-          const usedAlgo = algoId === 2 ? 'AES-CBC' : 'AES-GCM';
-          const salt = headerView.slice(8, 24);
+          const version = headerView[6];
+          let offset = payloadOffset;
+          let usedAlgo: CryptoAlgorithm = 'AES-GCM';
+          let salt: Uint8Array;
+          let isCompressed = false;
+          let requiresKeyFile = false;
+
+          if (version === 1) {
+             usedAlgo = 'AES-GCM'; // V1 assumes GCM
+             // Legacy V1 (Magic 6, Ver 1, Algo 1, Salt 16) -> Wait, previous code was slightly different?
+             // Previous code: [Magic 6] [Ver 1] [Algo 1] [Salt 16] = 24 bytes
+             // This matches.
+             const algoId = headerView[7];
+             usedAlgo = algoId === 2 ? 'AES-CBC' : 'AES-GCM';
+             salt = headerView.slice(8, 24);
+             offset += 24;
+             addLog('DETECTED V1 LEGACY CONTAINER');
+          } else if (version === 2) {
+             const algoId = headerView[7];
+             usedAlgo = algoId === 2 ? 'AES-CBC' : 'AES-GCM';
+             const options = headerView[8];
+             isCompressed = (options & 1) === 1;
+             requiresKeyFile = (options & 2) === 2;
+             
+             salt = headerView.slice(9, 25);
+             offset += 25;
+             addLog(`DETECTED V2 CONTAINER [COMPRESSION:${isCompressed ? 'ON' : 'OFF'}]`);
+             if (requiresKeyFile && !keyFileHash) {
+                 throw new Error("THIS FILE REQUIRES A KEYFILE FOR DECRYPTION");
+             }
+          } else {
+              throw new Error(`UNSUPPORTED VERSION: ${version}`);
+          }
 
           // 3. Derive Key
-          const key = await deriveMasterKey(password, salt, usedAlgo);
+          const key = await deriveMasterKey(password, salt, usedAlgo, keyFileHash || undefined);
           const decryptedParts: ArrayBuffer[] = [];
 
           // 4. Loop Chunks
-          let offset = payloadOffset + headerSize;
           const totalSize = inputBlob.size;
           const ivLen = usedAlgo === 'AES-GCM' ? 12 : 16;
 
@@ -405,16 +479,30 @@ const App: React.FC = () => {
               offset += chunkLen;
 
               const decryptedChunk = await decryptChunk(cipherBuffer, key, iv, usedAlgo);
-              decryptedParts.push(decryptedChunk);
+              
+              let finalChunk = decryptedChunk;
+              if (isCompressed) {
+                  finalChunk = await decompressBuffer(decryptedChunk);
+              }
+
+              // Integrity Hash
+              const partHash = await hashData(finalChunk);
+              chunkHashes.push(partHash);
+
+              decryptedParts.push(finalChunk);
 
               const percent = Math.min(99, Math.round(((offset - payloadOffset) / (totalSize - payloadOffset)) * 100));
               setProgress(percent);
               await new Promise(r => setTimeout(r, 0));
           }
 
+          // Verify Integrity
+          const masterHashBuffer = await hashBufferRaw(new TextEncoder().encode(chunkHashes.join('')));
+          const masterHashHex = Array.from(new Uint8Array(masterHashBuffer)).map(b => b.toString(16).padStart(2,'0')).join('');
+          addLog(`DECRYPTED INTEGRITY HASH: ${masterHashHex.substring(0, 16)}...`);
+
           // 5. Finalize
           const finalBlob = new Blob(decryptedParts);
-          
           let dlName = originalName.replace('.vortex', '').replace(camouflageExt, '');
           if (isStegano) dlName = "revealed_payload.bin";
 
@@ -553,14 +641,12 @@ const App: React.FC = () => {
           const f = files[i];
           addLog(`[${i+1}/${files.length}] PURGING: ${f.name}`);
           try {
-              // Simulate DoD 3-pass overwrite time delay
               for(let p=0; p<3; p++) {
                  setProgress(((p+1)/3)*100);
                  await new Promise(r => setTimeout(r, 400));
               }
           } catch(e: any) {
               addLog(`FAILED TO INCINERATE: ${f.name}`);
-              addLog(`[!] ERROR: ${e.message}`);
               playSound('error');
           }
       }
@@ -587,15 +673,15 @@ const App: React.FC = () => {
   const renderFileList = () => (
       <div className="max-h-48 overflow-y-auto space-y-2 pr-2 mb-4">
           {files.map((f, idx) => (
-               <div key={`${f.name}-${idx}`} className="flex items-center gap-3 bg-[#00E5FF]/5 border border-[#00E5FF]/20 p-3 rounded animate-in fade-in slide-in-from-top-2 shadow-[0_0_10px_rgba(0,229,255,0.05)]">
-                    <div className="p-2 bg-[#00E5FF]/10 rounded flex-shrink-0">
+               <div key={`${f.name}-${idx}`} className="flex items-center gap-3 bg-[#00E5FF] bg-opacity-5 border border-[#00E5FF] border-opacity-20 p-3 rounded animate-in fade-in slide-in-from-top-2 shadow-[0_0_10px_rgba(0,229,255,0.05)]">
+                    <div className="p-2 bg-[#00E5FF] bg-opacity-10 rounded flex-shrink-0">
                         {mode === AppMode.STEGANO ? <FileLock className="w-5 h-5 text-[#00E5FF]" /> : <Shield className="w-5 h-5 text-[#00E5FF]" />}
                     </div>
                     <div className="flex-1 min-w-0">
                        <div className="text-[#00E5FF] text-sm font-bold truncate tracking-wide">{f.name}</div>
                        <div className="text-gray-500 text-xs font-mono flex items-center gap-2">
                            <span>{(f.size / 1024 / 1024).toFixed(2)} MB</span>
-                           <span className="text-[#00E5FF]/30">|</span>
+                           <span className="text-[#00E5FF] opacity-30">|</span>
                            <span className="uppercase">{f.type || 'UNKNOWN TYPE'}</span>
                        </div>
                     </div>
@@ -616,8 +702,8 @@ const App: React.FC = () => {
   );
 
   const renderCoverImageDetail = (currentFile: File) => (
-    <div className="flex items-center gap-3 bg-[#00E5FF]/5 border border-[#00E5FF]/20 p-3 rounded mt-2 mb-4 animate-in fade-in slide-in-from-top-2 shadow-[0_0_10px_rgba(0,229,255,0.05)]">
-         <div className="p-2 bg-[#00E5FF]/10 rounded flex-shrink-0">
+    <div className="flex items-center gap-3 bg-[#00E5FF] bg-opacity-5 border border-[#00E5FF] border-opacity-20 p-3 rounded mt-2 mb-4 animate-in fade-in slide-in-from-top-2 shadow-[0_0_10px_rgba(0,229,255,0.05)]">
+         <div className="p-2 bg-[#00E5FF] bg-opacity-10 rounded flex-shrink-0">
              <FileCode className="w-5 h-5 text-[#00E5FF]" />
          </div>
          <div className="flex-1 min-w-0">
@@ -645,24 +731,24 @@ const App: React.FC = () => {
     <div className="min-h-screen flex flex-col items-center justify-center p-4 relative">
       {/* Background Matrix Rain Effect */}
       <div className="absolute inset-0 pointer-events-none opacity-5" style={{ 
-          backgroundImage: 'linear-gradient(0deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent)',
+          backgroundImage: 'linear-gradient(0deg, transparent 24%, rgba(0,229,255, .3) 25%, rgba(0,229,255, .3) 26%, transparent 27%, transparent 74%, rgba(0,229,255, .3) 75%, rgba(0,229,255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0,229,255, .3) 25%, rgba(0,229,255, .3) 26%, transparent 27%, transparent 74%, rgba(0,229,255, .3) 75%, rgba(0,229,255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0,229,255, .3) 25%, rgba(0,229,255, .3) 26%, transparent 27%, transparent 74%, rgba(0,229,255, .3) 75%, rgba(0,229,255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0,229,255, .3) 25%, rgba(0,229,255, .3) 26%, transparent 27%, transparent 74%, rgba(0,229,255, .3) 75%, rgba(0,229,255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0,229,255, .3) 25%, rgba(0,229,255, .3) 26%, transparent 27%, transparent 74%, rgba(0,229,255, .3) 75%, rgba(0,229,255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0,229,255, .3) 25%, rgba(0,229,255, .3) 26%, transparent 27%, transparent 74%, rgba(0,229,255, .3) 75%, rgba(0,229,255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0,229,255, .3) 25%, rgba(0,229,255, .3) 26%, transparent 27%, transparent 74%, rgba(0,229,255, .3) 75%, rgba(0,229,255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0,229,255, .3) 25%, rgba(0,229,255, .3) 26%, transparent 27%, transparent 74%, rgba(0,229,255, .3) 75%, rgba(0,229,255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0,229,255, .3) 25%, rgba(0,229,255, .3) 26%, transparent 27%, transparent 74%, rgba(0,229,255, .3) 75%, rgba(0,229,255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0,229,255, .3) 25%, rgba(0,229,255, .3) 26%, transparent 27%, transparent 74%, rgba(0,229,255, .3) 75%, rgba(0,229,255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0,229,255, .3) 25%, rgba(0,229,255, .3) 26%, transparent 27%, transparent 74%, rgba(0,229,255, .3) 75%, rgba(0,229,255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0,229,255, .3) 25%, rgba(0,229,255, .3) 26%, transparent 27%, transparent 74%, rgba(0,229,255, .3) 75%, rgba(0,229,255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0,229,255, .3) 25%, rgba(0,229,255, .3) 26%, transparent 27%, transparent 74%, rgba(0,229,255, .3) 75%, rgba(0,229,255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0,229,255, .3) 25%, rgba(0,229,255, .3) 26%, transparent 27%, transparent 74%, rgba(0,229,255, .3) 75%, rgba(0,229,255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0,229,255, .3) 25%, rgba(0,229,255, .3) 26%, transparent 27%, transparent 74%, rgba(0,229,255, .3) 75%, rgba(0,229,255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0,229,255, .3) 25%, rgba(0,229,255, .3) 26%, transparent 27%, transparent 74%, rgba(0,229,255, .3) 75%, rgba(0,229,255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0,229,255, .3) 25%, rgba(0,229,255, .3) 26%, transparent 27%, transparent 74%, rgba(0,229,255, .3) 75%, rgba(0,229,255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0,229,255, .3) 25%, rgba(0,229,255, .3) 26%, transparent 27%, transparent 74%, rgba(0,229,255, .3) 75%, rgba(0,229,255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0,229,255, .3) 25%, rgba(0,229,255, .3) 26%, transparent 27%, transparent 74%, rgba(0,229,255, .3) 75%, rgba(0,229,255, .3) 76%, transparent 77%, transparent)',
           backgroundSize: '50px 50px'
       }}></div>
 
       {/* Main Window */}
-      <div className="w-full max-w-2xl bg-[#0a0a0a] border border-[#00E5FF]/30 shadow-[0_0_50px_rgba(0,229,255,0.1)] rounded-sm relative overflow-hidden backdrop-blur-md z-20">
+      <div className="w-full max-w-2xl bg-[#0a0a0a] border border-[#00E5FF] border-opacity-30 shadow-[0_0_50px_rgba(0,229,255,0.1)] rounded-sm relative overflow-hidden backdrop-blur-md z-20">
         
         {/* Header Bar */}
-        <div className="bg-[#00E5FF]/10 p-3 flex justify-between items-center border-b border-[#00E5FF]/20 select-none">
+        <div className="bg-[#00E5FF] bg-opacity-10 p-3 flex justify-between items-center border-b border-[#00E5FF] border-opacity-20 select-none">
             <div className="flex items-center gap-2 text-[#00E5FF]">
                 <Shield className="w-5 h-5 animate-pulse" />
-                <span className="font-bold tracking-widest text-sm">VORTEX SHIELD <span className="text-[10px] opacity-70">ULTIMATE_EDITION_V3</span></span>
+                <span className="font-bold tracking-widest text-sm">VORTEX SHIELD <span className="text-[10px] opacity-70">ULTIMATE_EDITION_V3.1</span></span>
             </div>
             
             {resumeAvailable && (
                 <button 
                     onClick={handleResumeSession}
-                    className="flex items-center gap-1 text-[10px] bg-[#00E5FF]/10 text-[#00E5FF] px-2 py-1 rounded border border-[#00E5FF]/30 hover:bg-[#00E5FF]/20 transition-colors animate-pulse"
+                    className="flex items-center gap-1 text-[10px] bg-[#00E5FF] bg-opacity-10 text-[#00E5FF] px-2 py-1 rounded border border-[#00E5FF] border-opacity-30 hover:bg-[#00E5FF] hover:bg-opacity-20 transition-colors animate-pulse"
                 >
                     <RotateCcw className="w-3 h-3" />
                     RESUME_SESSION
@@ -677,7 +763,7 @@ const App: React.FC = () => {
         </div>
 
         {/* Navigation */}
-        <div className="grid grid-cols-4 border-b border-[#00E5FF]/20 text-xs sm:text-sm">
+        <div className="grid grid-cols-4 border-b border-[#00E5FF] border-opacity-20 text-xs sm:text-sm">
             {[
                 { id: AppMode.ENCRYPT, icon: Lock, label: 'ENCRYPT' },
                 { id: AppMode.DECRYPT, icon: Unlock, label: 'DECRYPT' },
@@ -697,7 +783,7 @@ const App: React.FC = () => {
                         setShowConfirmModal(false);
                         addLog(`SWITCHING MODE TO ${item.id}...`);
                     }}
-                    className={`p-3 flex flex-col items-center gap-1 transition-colors ${mode === item.id ? 'bg-[#00E5FF] text-black font-bold' : 'text-gray-400 hover:text-[#00E5FF] hover:bg-[#00E5FF]/5'}`}
+                    className={`p-3 flex flex-col items-center gap-1 transition-colors ${mode === item.id ? 'bg-[#00E5FF] text-black font-bold' : 'text-gray-400 hover:text-[#00E5FF] hover:bg-[#00E5FF] hover:bg-opacity-5'}`}
                 >
                     <item.icon className="w-4 h-4" />
                     {item.label}
@@ -752,28 +838,72 @@ const App: React.FC = () => {
             )}
             {files.length > 0 && !isScanning && renderFileList()}
 
-            {/* Algorithm Selector (Encrypt/Stegano only) */}
-            {(mode === AppMode.ENCRYPT || mode === AppMode.STEGANO) && (
-                <div className="flex items-center gap-3 bg-[#00E5FF]/5 border border-[#00E5FF]/20 p-2 rounded">
-                    <Settings className="w-4 h-4 text-[#00E5FF]" />
-                    <span className="text-xs text-gray-400 font-bold tracking-wider">ALGORITHM:</span>
-                    <div className="flex gap-2">
-                        {(['AES-GCM', 'AES-CBC'] as CryptoAlgorithm[]).map((algo) => (
-                            <button
-                                key={algo}
-                                onClick={() => setAlgorithm(algo)}
-                                className={`text-[10px] px-2 py-1 rounded border transition-all ${
-                                    algorithm === algo 
-                                    ? 'bg-[#00E5FF] text-black border-[#00E5FF] font-bold' 
-                                    : 'border-gray-700 text-gray-500 hover:border-[#00E5FF]'
-                                }`}
-                            >
-                                {algo}
-                            </button>
-                        ))}
-                    </div>
-                </div>
-            )}
+            {/* Global Settings */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                 {/* Algorithm */}
+                 <div className="space-y-3">
+                     {(mode === AppMode.ENCRYPT || mode === AppMode.STEGANO) && (
+                        <div className="flex items-center justify-between bg-[#00E5FF] bg-opacity-5 border border-[#00E5FF] border-opacity-20 p-2 rounded">
+                            <div className="flex items-center gap-2">
+                                <Settings className="w-4 h-4 text-[#00E5FF]" />
+                                <span className="text-xs text-gray-400 font-bold tracking-wider">ALGORITHM</span>
+                            </div>
+                            <div className="flex gap-1">
+                                {(['AES-GCM', 'AES-CBC'] as CryptoAlgorithm[]).map((algo) => (
+                                    <button
+                                        key={algo}
+                                        onClick={() => setAlgorithm(algo)}
+                                        className={`text-[10px] px-2 py-1 rounded border transition-all ${
+                                            algorithm === algo 
+                                            ? 'bg-[#00E5FF] text-black border-[#00E5FF] font-bold' 
+                                            : 'border-gray-700 text-gray-500 hover:border-[#00E5FF]'
+                                        }`}
+                                    >
+                                        {algo}
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
+                     )}
+                 </div>
+
+                 {/* Advanced Encryption Options */}
+                 {(mode === AppMode.ENCRYPT || mode === AppMode.STEGANO) && (
+                     <div className="space-y-3">
+                        {/* Compression Toggle */}
+                        <div 
+                            onClick={() => setUseCompression(!useCompression)}
+                            className={`flex items-center justify-between p-2 rounded border cursor-pointer transition-all ${useCompression ? 'bg-[#00E5FF] bg-opacity-10 border-[#00E5FF]' : 'border-gray-800 hover:border-[#00E5FF]'}`}
+                        >
+                            <div className="flex items-center gap-2">
+                                <FileArchive className={`w-4 h-4 ${useCompression ? 'text-[#00E5FF]' : 'text-gray-500'}`} />
+                                <span className={`text-xs font-bold tracking-wider ${useCompression ? 'text-[#00E5FF]' : 'text-gray-500'}`}>COMPRESSION</span>
+                            </div>
+                            <div className={`w-3 h-3 rounded-full ${useCompression ? 'bg-[#00E5FF] shadow-[0_0_8px_#00E5FF]' : 'bg-gray-800'}`}></div>
+                        </div>
+
+                         {/* Key File Drop (Mini) */}
+                         <div className={`relative p-2 rounded border border-dashed transition-all ${keyFile ? 'border-[#00E5FF] bg-[#00E5FF] bg-opacity-5' : 'border-gray-700 hover:border-[#00E5FF]'}`}>
+                             <DropZone 
+                                onFilesSelect={handleKeyFileSelect} 
+                                label={keyFile ? "KEY FILE ACTIVE" : "DROP KEY FILE (OPTIONAL)"} 
+                                multiple={false}
+                             />
+                             <div className="absolute inset-0 pointer-events-none flex items-center justify-between px-4">
+                                <div className="flex items-center gap-2 z-10 bg-black/50 p-1 rounded backdrop-blur-sm">
+                                    <Key className={`w-4 h-4 ${keyFile ? 'text-[#00E5FF]' : 'text-gray-500'}`} />
+                                    <span className={`text-xs font-bold ${keyFile ? 'text-[#00E5FF]' : 'text-gray-500'}`}>
+                                        {keyFile ? keyFile.name.substring(0, 15) : "KEY FILE AUTH"}
+                                    </span>
+                                </div>
+                                {keyFile && (
+                                    <Fingerprint className="w-4 h-4 text-[#00E5FF] animate-pulse z-10" />
+                                )}
+                             </div>
+                         </div>
+                     </div>
+                 )}
+            </div>
 
             {/* Password Field */}
             {mode !== AppMode.INCINERATOR && (
@@ -784,9 +914,9 @@ const App: React.FC = () => {
                         value={password}
                         onChange={handlePasswordChange}
                         placeholder="ENTER SECURE KEY..."
-                        className="w-full bg-black/50 border border-[#00E5FF]/30 p-3 text-[#00E5FF] focus:outline-none focus:border-[#00E5FF] focus:shadow-[0_0_15px_rgba(0,229,255,0.3)] transition-all placeholder-gray-700 font-mono"
+                        className="w-full bg-black/50 border border-[#00E5FF] border-opacity-30 p-3 text-[#00E5FF] focus:outline-none focus:border-[#00E5FF] focus:shadow-[0_0_15px_rgba(0,229,255,0.3)] transition-all placeholder-gray-700 font-mono"
                     />
-                    <div className="absolute right-3 top-8 text-[#00E5FF]/30">
+                    <div className="absolute right-3 top-8 text-[#00E5FF] opacity-30">
                         <Lock className="w-4 h-4" />
                     </div>
                     
@@ -815,18 +945,68 @@ const App: React.FC = () => {
                 </div>
             )}
 
+            {/* Camouflage Mode Option (Encrypt Only) */}
+            {mode === AppMode.ENCRYPT && (
+                 <div className="bg-[#00E5FF] bg-opacity-5 border border-[#00E5FF] border-opacity-20 p-3 rounded transition-all">
+                    <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2 text-[#00E5FF] opacity-80">
+                            <FileCode className="w-4 h-4" />
+                            <span className="font-bold text-xs tracking-wider">CAMOUFLAGE MODE</span>
+                        </div>
+                         <label className="relative inline-flex items-center cursor-pointer">
+                            <input 
+                                type="checkbox" 
+                                className="sr-only peer"
+                                checked={camouflageMode}
+                                onChange={(e) => setCamouflageMode(e.target.checked)}
+                            />
+                            <div className="w-9 h-5 bg-gray-900 peer-focus:outline-none rounded-full peer border border-gray-700 peer-checked:border-[#00E5FF] peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-gray-400 after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-[#00E5FF] peer-checked:bg-opacity-20 peer-checked:after:bg-[#00E5FF]"></div>
+                        </label>
+                    </div>
+                    
+                    {camouflageMode && (
+                        <div className="mt-3 animate-in fade-in slide-in-from-top-1 space-y-3">
+                            <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
+                                {fakeExtensions.map(ext => (
+                                    <button
+                                        key={ext}
+                                        onClick={() => setCamouflageExt(ext)}
+                                        className={`text-[10px] sm:text-xs py-1 px-1 rounded transition-all font-mono border ${
+                                            camouflageExt === ext 
+                                            ? 'bg-[#00E5FF] text-black border-[#00E5FF] font-bold shadow-[0_0_10px_rgba(0,229,255,0.4)]' 
+                                            : 'bg-black border-gray-800 text-gray-500 hover:border-[#00E5FF] hover:text-[#00E5FF]'
+                                        }`}
+                                    >
+                                        {ext}
+                                    </button>
+                                ))}
+                            </div>
+                            <div className="relative">
+                                <input 
+                                    type="text" 
+                                    value={camouflageExt}
+                                    onChange={(e) => setCamouflageExt(e.target.value)}
+                                    className="w-full bg-black/50 border border-[#00E5FF] border-opacity-30 text-[#00E5FF] text-xs p-2 rounded focus:border-[#00E5FF] focus:outline-none focus:shadow-[0_0_10px_rgba(0,229,255,0.2)] font-mono placeholder-gray-700"
+                                    placeholder="CUSTOM EXTENSION (E.G. .XYZ)"
+                                />
+                            </div>
+                        </div>
+                    )}
+                 </div>
+            )}
+
             {/* Actions */}
             <div className="flex flex-col gap-4">
                 {/* Last Output / Copy Bar */}
                 {lastOutput && (
-                    <div className="bg-[#00E5FF]/10 border border-[#00E5FF]/30 p-2 rounded flex items-center justify-between animate-in fade-in slide-in-from-top-2">
+                    <div className="bg-[#00E5FF] bg-opacity-10 border border-[#00E5FF] border-opacity-30 p-2 rounded flex items-center justify-between animate-in fade-in slide-in-from-top-2">
                         <div className="flex items-center gap-2 overflow-hidden">
                             <Check className="w-4 h-4 text-[#00E5FF] shrink-0" />
                             <span className="text-xs font-mono text-[#00E5FF] truncate">{lastOutput}</span>
                         </div>
                         <button 
                             onClick={copyToClipboard}
-                            className={`p-1.5 rounded transition-all shrink-0 ${copySuccess ? 'bg-green-500 text-black' : 'hover:bg-[#00E5FF]/20 text-[#00E5FF]'}`}
+                            className={`p-1.5 rounded transition-all shrink-0 ${copySuccess ? 'bg-green-500 text-black' : 'hover:bg-[#00E5FF] hover:bg-opacity-20 text-[#00E5FF]'}`}
                             title="Copy to Clipboard"
                         >
                             {copySuccess ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
@@ -834,7 +1014,7 @@ const App: React.FC = () => {
                     </div>
                 )}
 
-                <div className="flex justify-end items-center gap-4 pt-4 border-t border-[#00E5FF]/10">
+                <div className="flex justify-end items-center gap-4 pt-4 border-t border-[#00E5FF] border-opacity-10">
                     {(isProcessing || isScanning) && (
                         <div className="flex items-center gap-2 text-[#00E5FF] animate-pulse">
                             <Loader2 className="w-4 h-4 animate-spin" />
@@ -856,7 +1036,7 @@ const App: React.FC = () => {
                         <CyberButton 
                             label={isProcessing ? "DECRYPTING..." : "UNLOCK VAULT"} 
                             onClick={handleDecrypt}
-                            disabled={files.length === 0 || !password || isProcessing || isScanning}
+                            disabled={files.length === 0 || !password || isProcessing || isScanning} 
                             isLoading={isProcessing}
                         />
                     )}
@@ -901,12 +1081,12 @@ const App: React.FC = () => {
         )}
 
         {/* Terminal / Log */}
-        <div className="bg-black border-t border-[#00E5FF]/20 p-4 font-mono text-xs h-32 overflow-y-auto">
+        <div className="bg-black border-t border-[#00E5FF] border-opacity-20 p-4 font-mono text-xs h-32 overflow-y-auto">
             <div className="flex items-center gap-2 text-gray-500 mb-2 border-b border-gray-800 pb-1">
                 <Terminal className="w-3 h-3" />
                 <span>SYSTEM_LOG</span>
             </div>
-            <div className="space-y-1 text-[#00E5FF]/80">
+            <div className="space-y-1 text-[#00E5FF] opacity-80">
                 {log.map((msg, i) => (
                     <div key={i} className="flex gap-2">
                         <span className="opacity-50 text-[10px]">{new Date().toLocaleTimeString()}</span>
@@ -974,7 +1154,7 @@ const App: React.FC = () => {
       <div className="mt-4 flex flex-col items-center gap-5 relative z-10 animate-in fade-in slide-in-from-bottom-8 duration-1000">
           <div className="relative group cursor-default">
               <div className="absolute -inset-1 bg-gradient-to-r from-[#00E5FF] to-[#ff00c1] rounded blur opacity-20 group-hover:opacity-60 transition duration-500"></div>
-              <div className="relative px-5 py-2 bg-black/80 ring-1 ring-[#00E5FF]/20 rounded flex items-center gap-3 backdrop-blur-sm transition-transform group-hover:-translate-y-0.5">
+              <div className="relative px-5 py-2 bg-black/80 ring-1 ring-[#00E5FF] ring-opacity-20 rounded flex items-center gap-3 backdrop-blur-sm transition-transform group-hover:-translate-y-0.5">
                  <Code className="w-4 h-4 text-[#00E5FF] animate-pulse" />
                  <span className="text-xs font-mono text-[#00E5FF] tracking-widest cyber-glitch font-bold" data-text="ZAHID HASAN TONMOY">ZAHID HASAN TONMOY</span>
               </div>

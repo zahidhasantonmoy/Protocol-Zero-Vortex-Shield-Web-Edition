@@ -4,13 +4,51 @@ export type CryptoAlgorithm = 'AES-GCM' | 'AES-CBC';
 
 export const STEGANO_DELIMITER = "||VORTEX_SHIELD_PAYLOAD||";
 
+// Compression Helpers (GZIP)
+export const compressBuffer = async (input: ArrayBuffer): Promise<ArrayBuffer> => {
+  // Create a stream from the buffer
+  const stream = new Blob([input]).stream();
+  // Pipe through GZIP compressor
+  const compressedStream = stream.pipeThrough(new CompressionStream('gzip'));
+  // Read back into buffer
+  return new Response(compressedStream).arrayBuffer();
+};
+
+export const decompressBuffer = async (input: ArrayBuffer): Promise<ArrayBuffer> => {
+  const stream = new Blob([input]).stream();
+  const decompressedStream = stream.pipeThrough(new DecompressionStream('gzip'));
+  return new Response(decompressedStream).arrayBuffer();
+};
+
+// Hashing Helper (SHA-256)
+export const hashData = async (data: ArrayBuffer): Promise<string> => {
+  const hashBuffer = await window.crypto.subtle.digest('SHA-256', data);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+};
+
+export const hashBufferRaw = async (data: ArrayBuffer): Promise<ArrayBuffer> => {
+    return window.crypto.subtle.digest('SHA-256', data);
+};
+
 // Key Derivation
-// We derive a master key once per file using PBKDF2
-export const deriveMasterKey = async (password: string, salt: Uint8Array, algorithm: CryptoAlgorithm): Promise<CryptoKey> => {
+// supports optional keyfile hash mixing
+export const deriveMasterKey = async (
+    password: string, 
+    salt: Uint8Array, 
+    algorithm: CryptoAlgorithm,
+    keyFileHash?: string
+): Promise<CryptoKey> => {
   const enc = new TextEncoder();
+  
+  let keyMaterialStr = password;
+  if (keyFileHash) {
+      keyMaterialStr += `::KEYFILE::${keyFileHash}`;
+  }
+
   const keyMaterial = await window.crypto.subtle.importKey(
     "raw",
-    enc.encode(password),
+    enc.encode(keyMaterialStr),
     { name: "PBKDF2" },
     false,
     ["deriveKey"]
@@ -31,7 +69,6 @@ export const deriveMasterKey = async (password: string, salt: Uint8Array, algori
 };
 
 // Chunk Encryption
-// Encrypts a single slice of the file. Returns the encrypted data and the specific IV used for this chunk.
 export const encryptChunk = async (
   chunk: ArrayBuffer, 
   key: CryptoKey, 
@@ -70,7 +107,6 @@ export const decryptChunk = async (
 };
 
 // Helper: Find a delimiter in a byte array
-// Used to locate where the cover image ends and the payload begins without loading the whole file
 export const findDelimiterIndex = (buffer: Uint8Array, delimiter: Uint8Array): number => {
     for (let i = 0; i <= buffer.length - delimiter.length; i++) {
         let found = true;

@@ -20,7 +20,7 @@ const INACTIVITY_LIMIT_MS = 5 * 60 * 1000; // 5 Minutes
 const App: React.FC = () => {
   // --- State ---
   const [mode, setMode] = useState<AppMode>(AppMode.ENCRYPT);
-  const [file, setFile] = useState<File | null>(null);
+  const [files, setFiles] = useState<File[]>([]);
   const [coverImage, setCoverImage] = useState<File | null>(null);
   const [password, setPassword] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
@@ -72,11 +72,11 @@ const App: React.FC = () => {
   }, []);
 
   // 3. Save State Logic
-  const stateRef = useRef({ mode, file, password, algorithm, camouflageMode, camouflageExt });
+  const stateRef = useRef({ mode, files, password, algorithm, camouflageMode, camouflageExt });
   
   useEffect(() => {
-    stateRef.current = { mode, file, password, algorithm, camouflageMode, camouflageExt };
-  }, [mode, file, password, algorithm, camouflageMode, camouflageExt]);
+    stateRef.current = { mode, files, password, algorithm, camouflageMode, camouflageExt };
+  }, [mode, files, password, algorithm, camouflageMode, camouflageExt]);
 
   const saveCurrentState = () => {
       const s = stateRef.current;
@@ -85,7 +85,7 @@ const App: React.FC = () => {
           algorithm: s.algorithm,
           camouflageMode: s.camouflageMode,
           camouflageExt: s.camouflageExt,
-          fileDetails: s.file ? { name: s.file.name, size: s.file.size } : null,
+          filesDetails: s.files.map(f => ({ name: f.name, size: f.size })),
           password: s.password, 
           timestamp: Date.now()
       };
@@ -95,7 +95,7 @@ const App: React.FC = () => {
   // 3a. Save on User Actions
   useEffect(() => {
       saveCurrentState();
-  }, [mode, algorithm, camouflageMode, camouflageExt, file, password]);
+  }, [mode, algorithm, camouflageMode, camouflageExt, files, password]);
 
   // 3b. Save on Regular Intervals
   useEffect(() => {
@@ -117,7 +117,7 @@ const App: React.FC = () => {
         }
         
         setPassword('');
-        setFile(null);
+        setFiles([]);
         setCoverImage(null);
         setLastOutput(null);
         setPasswordStrength(0);
@@ -191,8 +191,8 @@ const App: React.FC = () => {
               
               setResumeAvailable(false);
               addLog('> SESSION SETTINGS RESTORED');
-              if (parsed.fileDetails) {
-                addLog(`> PENDING: RE-SELECT FILE ${parsed.fileDetails.name}`);
+              if (parsed.filesDetails && parsed.filesDetails.length > 0) {
+                addLog(`> PENDING: RE-SELECT ${parsed.filesDetails.length} FILES`);
               }
               playSound('success');
           } catch (e) {
@@ -205,21 +205,23 @@ const App: React.FC = () => {
     setLog(prev => [...prev.slice(-10), `> ${msg}`]);
   };
 
-  const handleFileSelect = (selectedFile: File) => {
+  const handleFilesSelect = (selectedFiles: File[]) => {
       setIsScanning(true);
-      setFile(null);
+      setFiles([]);
       setLastOutput(null);
-      addLog(`SCANNING FILE: ${selectedFile.name}...`);
+      addLog(`SCANNING ${selectedFiles.length} FILES...`);
       playSound('process');
       setTimeout(() => {
-          setFile(selectedFile);
+          setFiles(selectedFiles);
           setIsScanning(false);
-          addLog(`FILE VERIFIED: ${(selectedFile.size/1024/1024).toFixed(2)} MB`);
+          addLog(`BATCH LOADED: ${selectedFiles.length} FILES READY`);
           playSound('success');
       }, 800);
   };
 
-  const handleCoverSelect = (selectedFile: File) => {
+  const handleCoverSelect = (files: File[]) => {
+      if (files.length === 0) return;
+      const selectedFile = files[0];
       setIsScanning(true);
       setCoverImage(null);
       addLog(`ANALYZING COVER IMAGE...`);
@@ -245,7 +247,7 @@ const App: React.FC = () => {
     addLog('CRITICAL: DURESS SIGNAL DETECTED');
     addLog('ENGAGING DECOY PROTOCOLS...');
     setTimeout(() => {
-        setFile(null);
+        setFiles([]);
         setCoverImage(null);
         setMode(AppMode.DECRYPT);
         setPassword('');
@@ -259,10 +261,8 @@ const App: React.FC = () => {
 
   // --- CORE CHUNKED ENCRYPTION LOGIC ---
   const executeChunkedEncryption = async (inputFile: File, coverFile: File | null = null) => {
-      setIsProcessing(true);
       setProgress(0);
       setLastOutput(null);
-      addLog('INITIALIZING CHUNKED ENCRYPTION ENGINE...');
 
       try {
           const salt = window.crypto.getRandomValues(new Uint8Array(16));
@@ -272,13 +272,12 @@ const App: React.FC = () => {
           
           // 1. If Stegano, Append Cover Image + Delimiter first
           if (coverFile) {
-              addLog('PROCESSING COVER IMAGE...');
               blobParts.push(coverFile);
               const encoder = new TextEncoder();
               blobParts.push(encoder.encode(STEGANO_DELIMITER));
           }
 
-          // 2. Add Global Header: [Magic(6)] [Ver(1)] [Algo(1)] [Salt(16)]
+          // 2. Add Global Header
           const encoder = new TextEncoder();
           const magicBytes = encoder.encode(VORTEX_MAGIC);
           const versionByte = new Uint8Array([VERSION]);
@@ -292,36 +291,29 @@ const App: React.FC = () => {
           let chunkIndex = 0;
 
           while (offset < totalSize) {
-              // Read chunk
               const slice = inputFile.slice(offset, offset + CHUNK_SIZE);
               const chunkBuffer = await slice.arrayBuffer();
               
-              // Encrypt Chunk
-              // Format per chunk: [Len(4)][IV(12/16)][Ciphertext]
               const { encrypted, iv } = await encryptChunk(chunkBuffer, key, algorithm);
               
               const lenBuffer = new DataView(new ArrayBuffer(4));
-              lenBuffer.setUint32(0, encrypted.byteLength, false); // Big Endian Length
+              lenBuffer.setUint32(0, encrypted.byteLength, false);
               
               blobParts.push(lenBuffer.buffer);
               blobParts.push(iv);
               blobParts.push(encrypted);
 
-              // Update Progress
               offset += CHUNK_SIZE;
               chunkIndex++;
               const percent = Math.min(99, Math.round((offset / totalSize) * 100));
               setProgress(percent);
               
-              // Yield to main thread to keep UI responsive
               await new Promise(r => setTimeout(r, 0));
           }
 
           // 4. Finalize
-          addLog('FINALIZING BLOB ASSEMBLY...');
           const finalBlob = new Blob(blobParts, { type: coverFile ? 'image/png' : 'application/octet-stream' });
           
-          // Determine Filename
           let fileName = `${inputFile.name}.vortex`;
           if (coverFile) {
               fileName = `camouflaged_${coverFile.name}`;
@@ -334,32 +326,22 @@ const App: React.FC = () => {
           }
 
           downloadBlob(finalBlob, fileName);
-          setLastOutput(fileName);
-          setProgress(100);
-          addLog('OPERATION COMPLETE.');
-          playSound('success');
+          return fileName;
 
       } catch (e: any) {
-          addLog(`ERROR: ${e.message}`);
-          playSound('error');
-      } finally {
-          setIsProcessing(false);
+          throw new Error(e.message);
       }
   };
 
   // --- CORE CHUNKED DECRYPTION LOGIC ---
-  const executeChunkedDecryption = async (inputBlob: Blob, isStegano: boolean) => {
-      setIsProcessing(true);
+  const executeChunkedDecryption = async (inputBlob: Blob, isStegano: boolean, originalName: string) => {
       setProgress(0);
       setLastOutput(null);
-      addLog('INITIALIZING DECRYPTION STREAM...');
 
       try {
           // 1. Locate Payload Start
           let payloadOffset = 0;
           if (isStegano) {
-              addLog('SCANNING FOR HIDDEN PAYLOAD MARKER...');
-              // Only scan the first 50MB for the delimiter to avoid loading huge files
               const scanSize = Math.min(inputBlob.size, 50 * 1024 * 1024);
               const scanBuffer = await inputBlob.slice(0, scanSize).arrayBuffer();
               const scanUint8 = new Uint8Array(scanBuffer);
@@ -374,7 +356,6 @@ const App: React.FC = () => {
           }
 
           // 2. Read Global Header
-          // Header Size: 6(Magic) + 1(Ver) + 1(Algo) + 16(Salt) = 24 bytes
           const headerSize = 24;
           const headerSlice = inputBlob.slice(payloadOffset, payloadOffset + headerSize);
           const headerBuffer = await headerSlice.arrayBuffer();
@@ -382,7 +363,6 @@ const App: React.FC = () => {
           const encoder = new TextEncoder();
           const magicBytes = encoder.encode(VORTEX_MAGIC);
 
-          // Verify Magic Signature
           for(let i=0; i<magicBytes.length; i++) {
               if (headerView[i] !== magicBytes[i]) {
                   throw new Error("INVALID FILE FORMAT OR HEADER");
@@ -392,8 +372,6 @@ const App: React.FC = () => {
           const algoId = headerView[7];
           const usedAlgo = algoId === 2 ? 'AES-CBC' : 'AES-GCM';
           const salt = headerView.slice(8, 24);
-
-          addLog(`HEADER VERIFIED. ALGO: ${usedAlgo}`);
 
           // 3. Derive Key
           const key = await deriveMasterKey(password, salt, usedAlgo);
@@ -405,28 +383,23 @@ const App: React.FC = () => {
           const ivLen = usedAlgo === 'AES-GCM' ? 12 : 16;
 
           while (offset < totalSize) {
-              // Read Length (4 bytes)
               const lenSlice = inputBlob.slice(offset, offset + 4);
               if (lenSlice.size < 4) break;
               const lenBuffer = await lenSlice.arrayBuffer();
               const chunkLen = new DataView(lenBuffer).getUint32(0, false);
               offset += 4;
 
-              // Read IV
               const ivSlice = inputBlob.slice(offset, offset + ivLen);
               const iv = new Uint8Array(await ivSlice.arrayBuffer());
               offset += ivLen;
 
-              // Read Ciphertext
               const cipherSlice = inputBlob.slice(offset, offset + chunkLen);
               const cipherBuffer = await cipherSlice.arrayBuffer();
               offset += chunkLen;
 
-              // Decrypt
               const decryptedChunk = await decryptChunk(cipherBuffer, key, iv, usedAlgo);
               decryptedParts.push(decryptedChunk);
 
-              // Progress
               const percent = Math.min(99, Math.round(((offset - payloadOffset) / (totalSize - payloadOffset)) * 100));
               setProgress(percent);
               await new Promise(r => setTimeout(r, 0));
@@ -435,20 +408,14 @@ const App: React.FC = () => {
           // 5. Finalize
           const finalBlob = new Blob(decryptedParts);
           
-          let dlName = file!.name.replace('.vortex', '').replace(camouflageExt, '');
+          let dlName = originalName.replace('.vortex', '').replace(camouflageExt, '');
           if (isStegano) dlName = "revealed_payload.bin";
 
           downloadBlob(finalBlob, dlName);
-          setLastOutput(dlName);
-          setProgress(100);
-          addLog('DECRYPTION SUCCESSFUL.');
-          playSound('success');
+          return dlName;
 
       } catch (e: any) {
-          addLog(`ERROR: ${e.message}`);
-          playSound('error');
-      } finally {
-          setIsProcessing(false);
+          throw new Error(e.message);
       }
   };
 
@@ -465,12 +432,29 @@ const App: React.FC = () => {
   };
 
   const handleEncrypt = async () => {
-    if (!file || !password) return;
-    await executeChunkedEncryption(file);
+    if (files.length === 0 || !password) return;
+    setIsProcessing(true);
+    addLog('STARTING BATCH ENCRYPTION...');
+
+    for (let i = 0; i < files.length; i++) {
+        const f = files[i];
+        addLog(`[${i+1}/${files.length}] ENCRYPTING: ${f.name}`);
+        try {
+            const out = await executeChunkedEncryption(f);
+            setLastOutput(out);
+        } catch (e: any) {
+            addLog(`ERROR ON ${f.name}: ${e.message}`);
+        }
+    }
+    
+    setIsProcessing(false);
+    setProgress(100);
+    addLog('BATCH OPERATION COMPLETE.');
+    playSound('success');
   };
 
   const handleDecrypt = async () => {
-      if (!file || !password) return;
+      if (files.length === 0 || !password) return;
       if (duressMode) {
           setIsProcessing(true);
           await new Promise(r => setTimeout(r, 2000));
@@ -478,40 +462,91 @@ const App: React.FC = () => {
           setShowFakeSuccess(true);
           return;
       }
-      await executeChunkedDecryption(file, false);
+      
+      setIsProcessing(true);
+      addLog('STARTING BATCH DECRYPTION...');
+
+      for (let i = 0; i < files.length; i++) {
+          const f = files[i];
+          addLog(`[${i+1}/${files.length}] DECRYPTING: ${f.name}`);
+          try {
+              const out = await executeChunkedDecryption(f, false, f.name);
+              setLastOutput(out);
+          } catch (e: any) {
+             addLog(`ERROR ON ${f.name}: ${e.message}`);
+          }
+      }
+
+      setIsProcessing(false);
+      setProgress(100);
+      addLog('BATCH OPERATION COMPLETE.');
+      playSound('success');
   };
 
   const handleStegano = async () => {
-      if (!file || !coverImage || !password) return;
-      addLog(`EMBEDDING PAYLOAD INTO ${coverImage.name}`);
-      await executeChunkedEncryption(file, coverImage);
+      if (files.length === 0 || !coverImage || !password) return;
+      setIsProcessing(true);
+      addLog(`EMBEDDING ${files.length} PAYLOADS...`);
+      
+      for (let i = 0; i < files.length; i++) {
+        const f = files[i];
+        addLog(`[${i+1}/${files.length}] HIDING: ${f.name}`);
+        try {
+            await executeChunkedEncryption(f, coverImage);
+        } catch (e: any) {
+            addLog(`ERROR: ${e.message}`);
+        }
+      }
+      setIsProcessing(false);
+      setProgress(100);
+      addLog('BATCH OPERATION COMPLETE.');
+      playSound('success');
   };
 
   const handleSteganoDecrypt = async () => {
-      if (!file || !password) return;
-      await executeChunkedDecryption(file, true);
+      if (files.length === 0 || !password) return;
+      setIsProcessing(true);
+      
+      for (let i = 0; i < files.length; i++) {
+          const f = files[i];
+          addLog(`[${i+1}/${files.length}] EXTRACTING FROM: ${f.name}`);
+          try {
+             await executeChunkedDecryption(f, true, f.name);
+          } catch (e: any) {
+             addLog(`ERROR: ${e.message}`);
+          }
+      }
+      setIsProcessing(false);
+      setProgress(100);
+      addLog('BATCH OPERATION COMPLETE.');
+      playSound('success');
   };
 
   const handleIncinerateClick = () => {
-      if (!file) return;
+      if (files.length === 0) return;
       setShowConfirmModal(true);
   };
 
   const handleIncinerateConfirm = async () => {
       setShowConfirmModal(false);
-      if(!file) return;
+      if(files.length === 0) return;
       setIsProcessing(true);
       
-      addLog(`INITIATING DATA INCINERATION: ${file.name}`);
-      // Simulate DoD 3-pass overwrite time delay
-      for(let i=0; i<3; i++) {
-          setProgress(((i+1)/3)*100);
-          addLog(`PASS ${i+1}/3: OVERWRITING SECTORS...`);
-          await new Promise(r => setTimeout(r, 800));
+      addLog(`INITIATING BATCH INCINERATION: ${files.length} FILES`);
+      
+      for (let i = 0; i < files.length; i++) {
+          const f = files[i];
+          addLog(`[${i+1}/${files.length}] PURGING: ${f.name}`);
+          // Simulate DoD 3-pass overwrite time delay
+          for(let p=0; p<3; p++) {
+             setProgress(((p+1)/3)*100);
+             await new Promise(r => setTimeout(r, 400));
+          }
       }
-      addLog('FILE BUFFER PURGED.');
-      setFile(null);
-      setLastOutput("DATA INCINERATED");
+
+      addLog('MEMORY BUFFERS FLUSHED.');
+      setFiles([]);
+      setLastOutput("BATCH INCINERATED");
       setIsProcessing(false);
       playSound('success');
   };
@@ -528,23 +563,53 @@ const App: React.FC = () => {
       );
   }
 
-  const renderFileDetail = (currentFile: File, onClear: () => void, icon?: React.ReactNode) => (
+  const renderFileList = () => (
+      <div className="max-h-48 overflow-y-auto space-y-2 pr-2 mb-4">
+          {files.map((f, idx) => (
+               <div key={`${f.name}-${idx}`} className="flex items-center gap-3 bg-[#00E5FF]/5 border border-[#00E5FF]/20 p-3 rounded animate-in fade-in slide-in-from-top-2 shadow-[0_0_10px_rgba(0,229,255,0.05)]">
+                    <div className="p-2 bg-[#00E5FF]/10 rounded flex-shrink-0">
+                        {mode === AppMode.STEGANO ? <FileLock className="w-5 h-5 text-[#00E5FF]" /> : <Shield className="w-5 h-5 text-[#00E5FF]" />}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                       <div className="text-[#00E5FF] text-sm font-bold truncate tracking-wide">{f.name}</div>
+                       <div className="text-gray-500 text-xs font-mono flex items-center gap-2">
+                           <span>{(f.size / 1024 / 1024).toFixed(2)} MB</span>
+                           <span className="text-[#00E5FF]/30">|</span>
+                           <span className="uppercase">{f.type || 'UNKNOWN TYPE'}</span>
+                       </div>
+                    </div>
+                    <button 
+                       onClick={(e) => {
+                           e.stopPropagation();
+                           setFiles(prev => prev.filter((_, i) => i !== idx));
+                           playSound('click');
+                       }} 
+                       className="p-1.5 hover:bg-red-500/20 hover:text-red-500 rounded transition-colors text-gray-500"
+                       title="Remove File"
+                    >
+                        <X className="w-4 h-4" />
+                    </button>
+                </div>
+          ))}
+      </div>
+  );
+
+  const renderCoverImageDetail = (currentFile: File) => (
     <div className="flex items-center gap-3 bg-[#00E5FF]/5 border border-[#00E5FF]/20 p-3 rounded mt-2 mb-4 animate-in fade-in slide-in-from-top-2 shadow-[0_0_10px_rgba(0,229,255,0.05)]">
          <div className="p-2 bg-[#00E5FF]/10 rounded flex-shrink-0">
-             {icon || <FileText className="w-5 h-5 text-[#00E5FF]" />}
+             <FileCode className="w-5 h-5 text-[#00E5FF]" />
          </div>
          <div className="flex-1 min-w-0">
             <div className="text-[#00E5FF] text-sm font-bold truncate tracking-wide">{currentFile.name}</div>
             <div className="text-gray-500 text-xs font-mono flex items-center gap-2">
                 <span>{(currentFile.size / 1024 / 1024).toFixed(2)} MB</span>
-                <span className="text-[#00E5FF]/30">|</span>
-                <span className="uppercase">{currentFile.type || 'UNKNOWN TYPE'}</span>
+                <span className="uppercase">COVER IMAGE</span>
             </div>
          </div>
          <button 
             onClick={(e) => {
                 e.stopPropagation();
-                onClear();
+                setCoverImage(null);
                 playSound('click');
             }} 
             className="p-1.5 hover:bg-red-500/20 hover:text-red-500 rounded transition-colors text-gray-500"
@@ -559,7 +624,7 @@ const App: React.FC = () => {
     <div className="min-h-screen flex flex-col items-center justify-center p-4 relative">
       {/* Background Matrix Rain Effect */}
       <div className="absolute inset-0 pointer-events-none opacity-5" style={{ 
-          backgroundImage: 'linear-gradient(0deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent)',
+          backgroundImage: 'linear-gradient(0deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent)',
           backgroundSize: '50px 50px'
       }}></div>
 
@@ -602,7 +667,7 @@ const App: React.FC = () => {
                     key={item.id}
                     onClick={() => {
                         setMode(item.id);
-                        setFile(null);
+                        setFiles([]);
                         setCoverImage(null);
                         setLog([]);
                         setPassword('');
@@ -638,33 +703,33 @@ const App: React.FC = () => {
             {mode === AppMode.STEGANO && (
                 <>
                     <DropZone 
-                        onFileSelect={handleCoverSelect} 
+                        onFilesSelect={handleCoverSelect} 
                         label="DROP COVER IMAGE (.PNG/.JPG)"
                         accept="image/*"
-                        selectedFile={coverImage}
+                        multiple={false}
                     />
-                    {isScanning && !coverImage && !file && (
+                    {isScanning && !coverImage && files.length === 0 && (
                         <div className="text-center text-[#00E5FF] text-xs animate-pulse">
                             <Loader2 className="w-4 h-4 animate-spin inline mr-2" />
                             ANALYZING BITMAP STRUCTURE...
                         </div>
                     )}
-                    {coverImage && !isScanning && renderFileDetail(coverImage, () => setCoverImage(null), <FileCode className="w-5 h-5 text-[#00E5FF]" />)}
+                    {coverImage && !isScanning && renderCoverImageDetail(coverImage)}
                 </>
             )}
 
             {/* Main File Drop */}
             <DropZone 
-                onFileSelect={handleFileSelect} 
-                label={mode === AppMode.STEGANO ? "DROP PAYLOAD FILE" : "DROP TARGET FILE"}
+                onFilesSelect={handleFilesSelect} 
+                label={mode === AppMode.STEGANO ? "DROP PAYLOAD FILES" : "DROP TARGET FILES"}
             />
-            {isScanning && !file && (
+            {isScanning && files.length === 0 && (
                  <div className="text-center text-[#00E5FF] text-xs animate-pulse">
                      <Loader2 className="w-4 h-4 animate-spin inline mr-2" />
                      VERIFYING INTEGRITY...
                  </div>
             )}
-            {file && !isScanning && renderFileDetail(file, () => setFile(null), mode === AppMode.STEGANO ? <FileLock className="w-5 h-5 text-[#00E5FF]" /> : <Shield className="w-5 h-5 text-[#00E5FF]" />)}
+            {files.length > 0 && !isScanning && renderFileList()}
 
             {/* Algorithm Selector (Encrypt/Stegano only) */}
             {(mode === AppMode.ENCRYPT || mode === AppMode.STEGANO) && (
@@ -812,7 +877,7 @@ const App: React.FC = () => {
                         <CyberButton 
                             label={isProcessing ? "ENCRYPTING..." : "ACTIVATE SHIELD"} 
                             onClick={handleEncrypt} 
-                            disabled={!file || !password || isProcessing || isScanning} 
+                            disabled={files.length === 0 || !password || isProcessing || isScanning} 
                             isLoading={isProcessing}
                         />
                     )}
@@ -820,7 +885,7 @@ const App: React.FC = () => {
                         <CyberButton 
                             label={isProcessing ? "DECRYPTING..." : "UNLOCK VAULT"} 
                             onClick={handleDecrypt}
-                            disabled={!file || !password || isProcessing || isScanning}
+                            disabled={files.length === 0 || !password || isProcessing || isScanning}
                             isLoading={isProcessing}
                         />
                     )}
@@ -830,13 +895,13 @@ const App: React.FC = () => {
                                 label="EXTRACT" 
                                 variant="ghost"
                                 onClick={handleSteganoDecrypt}
-                                disabled={!file || !password || isProcessing || isScanning}
+                                disabled={files.length === 0 || !password || isProcessing || isScanning}
                                 isLoading={isProcessing}
                             />
                              <CyberButton 
                                 label="EMBED" 
                                 onClick={handleStegano}
-                                disabled={!file || !coverImage || !password || isProcessing || isScanning}
+                                disabled={files.length === 0 || !coverImage || !password || isProcessing || isScanning}
                                 isLoading={isProcessing}
                             />
                          </div>
@@ -846,7 +911,7 @@ const App: React.FC = () => {
                             label={isProcessing ? "PURGING..." : "INCINERATE DATA"} 
                             variant="danger" 
                             onClick={handleIncinerateClick}
-                            disabled={!file || isProcessing || isScanning}
+                            disabled={files.length === 0 || isProcessing || isScanning}
                             isLoading={isProcessing}
                         />
                     )}
@@ -901,7 +966,7 @@ const App: React.FC = () => {
                         </div>
                         
                         <p className="text-gray-300 text-sm mb-6 leading-relaxed border-l-2 border-red-500/30 pl-4">
-                            You are about to <strong className="text-red-400">PERMANENTLY INCINERATE</strong> this file using DoD 5220.22-M algorithms.
+                            You are about to <strong className="text-red-400">PERMANENTLY INCINERATE</strong> {files.length} file(s) using DoD 5220.22-M algorithms.
                             <br/><br/>
                             This data will be unrecoverable.
                         </p>

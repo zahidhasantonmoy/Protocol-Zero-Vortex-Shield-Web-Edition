@@ -44,6 +44,7 @@ const App: React.FC = () => {
 
   const logEndRef = useRef<HTMLDivElement>(null);
   const inactivityTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastActivityRef = useRef<number>(Date.now());
   const processingRef = useRef<boolean>(false);
 
   const fakeExtensions = ['.dll', '.sys', '.dat', '.tmp', '.ini', '.bin'];
@@ -111,8 +112,9 @@ const App: React.FC = () => {
   // 5. Inactivity Timer
   useEffect(() => {
     const handleInactivityTimeout = () => {
+        // Prevent timeout if strictly processing data
         if (processingRef.current) {
-            resetTimer(); 
+            resetTimer(true); 
             return; 
         }
         
@@ -126,24 +128,29 @@ const App: React.FC = () => {
         playSound('error');
     };
 
-    const resetTimer = () => {
+    const resetTimer = (force = false) => {
+        const now = Date.now();
+        // Performance optimization: Throttle reset calls to max once per second
+        if (!force && now - lastActivityRef.current < 1000) return;
+        
+        lastActivityRef.current = now;
         if (inactivityTimerRef.current) clearTimeout(inactivityTimerRef.current);
         inactivityTimerRef.current = setTimeout(handleInactivityTimeout, INACTIVITY_LIMIT_MS);
     };
 
-    window.addEventListener('mousemove', resetTimer);
-    window.addEventListener('keydown', resetTimer);
-    window.addEventListener('click', resetTimer);
-    window.addEventListener('dragover', resetTimer);
+    window.addEventListener('mousemove', () => resetTimer());
+    window.addEventListener('keydown', () => resetTimer());
+    window.addEventListener('click', () => resetTimer());
+    window.addEventListener('dragover', () => resetTimer());
 
-    resetTimer();
+    resetTimer(true);
 
     return () => {
         if (inactivityTimerRef.current) clearTimeout(inactivityTimerRef.current);
-        window.removeEventListener('mousemove', resetTimer);
-        window.removeEventListener('keydown', resetTimer);
-        window.removeEventListener('click', resetTimer);
-        window.removeEventListener('dragover', resetTimer);
+        window.removeEventListener('mousemove', () => resetTimer());
+        window.removeEventListener('keydown', () => resetTimer());
+        window.removeEventListener('click', () => resetTimer());
+        window.removeEventListener('dragover', () => resetTimer());
     };
   }, []); 
 
@@ -443,7 +450,9 @@ const App: React.FC = () => {
             const out = await executeChunkedEncryption(f);
             setLastOutput(out);
         } catch (e: any) {
-            addLog(`ERROR ON ${f.name}: ${e.message}`);
+            addLog(`FAILED: ${f.name}`);
+            addLog(`[!] ERROR: ${e.message || "Unknown encryption error"}`);
+            playSound('error');
         }
     }
     
@@ -473,7 +482,9 @@ const App: React.FC = () => {
               const out = await executeChunkedDecryption(f, false, f.name);
               setLastOutput(out);
           } catch (e: any) {
-             addLog(`ERROR ON ${f.name}: ${e.message}`);
+             addLog(`FAILED: ${f.name}`);
+             addLog(`[!] REASON: ${e.message || "Decryption signature mismatch or corruption"}`);
+             playSound('error');
           }
       }
 
@@ -494,7 +505,9 @@ const App: React.FC = () => {
         try {
             await executeChunkedEncryption(f, coverImage);
         } catch (e: any) {
-            addLog(`ERROR: ${e.message}`);
+            addLog(`FAILED: ${f.name}`);
+            addLog(`[!] ERROR: ${e.message || "Embedding failure"}`);
+            playSound('error');
         }
       }
       setIsProcessing(false);
@@ -513,7 +526,9 @@ const App: React.FC = () => {
           try {
              await executeChunkedDecryption(f, true, f.name);
           } catch (e: any) {
-             addLog(`ERROR: ${e.message}`);
+             addLog(`FAILED: ${f.name}`);
+             addLog(`[!] ERROR: ${e.message || "No payload found or password incorrect"}`);
+             playSound('error');
           }
       }
       setIsProcessing(false);
@@ -537,10 +552,16 @@ const App: React.FC = () => {
       for (let i = 0; i < files.length; i++) {
           const f = files[i];
           addLog(`[${i+1}/${files.length}] PURGING: ${f.name}`);
-          // Simulate DoD 3-pass overwrite time delay
-          for(let p=0; p<3; p++) {
-             setProgress(((p+1)/3)*100);
-             await new Promise(r => setTimeout(r, 400));
+          try {
+              // Simulate DoD 3-pass overwrite time delay
+              for(let p=0; p<3; p++) {
+                 setProgress(((p+1)/3)*100);
+                 await new Promise(r => setTimeout(r, 400));
+              }
+          } catch(e: any) {
+              addLog(`FAILED TO INCINERATE: ${f.name}`);
+              addLog(`[!] ERROR: ${e.message}`);
+              playSound('error');
           }
       }
 
@@ -624,7 +645,7 @@ const App: React.FC = () => {
     <div className="min-h-screen flex flex-col items-center justify-center p-4 relative">
       {/* Background Matrix Rain Effect */}
       <div className="absolute inset-0 pointer-events-none opacity-5" style={{ 
-          backgroundImage: 'linear-gradient(0deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent)',
+          backgroundImage: 'linear-gradient(0deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent)',
           backgroundSize: '50px 50px'
       }}></div>
 
@@ -792,56 +813,6 @@ const App: React.FC = () => {
                         </div>
                     </div>
                 </div>
-            )}
-
-            {/* Camouflage Mode Option (Encrypt Only) */}
-            {mode === AppMode.ENCRYPT && (
-                 <div className="bg-[#00E5FF]/5 border border-[#00E5FF]/20 p-3 rounded transition-all">
-                    <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-2 text-[#00E5FF]/80">
-                            <FileCode className="w-4 h-4" />
-                            <span className="font-bold text-xs tracking-wider">CAMOUFLAGE MODE</span>
-                        </div>
-                         <label className="relative inline-flex items-center cursor-pointer">
-                            <input 
-                                type="checkbox" 
-                                className="sr-only peer"
-                                checked={camouflageMode}
-                                onChange={(e) => setCamouflageMode(e.target.checked)}
-                            />
-                            <div className="w-9 h-5 bg-gray-900 peer-focus:outline-none rounded-full peer border border-gray-700 peer-checked:border-[#00E5FF] peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-gray-400 after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-[#00E5FF]/20 peer-checked:after:bg-[#00E5FF]"></div>
-                        </label>
-                    </div>
-                    
-                    {camouflageMode && (
-                        <div className="mt-3 animate-in fade-in slide-in-from-top-1 space-y-3">
-                            <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
-                                {fakeExtensions.map(ext => (
-                                    <button
-                                        key={ext}
-                                        onClick={() => setCamouflageExt(ext)}
-                                        className={`text-[10px] sm:text-xs py-1 px-1 rounded transition-all font-mono border ${
-                                            camouflageExt === ext 
-                                            ? 'bg-[#00E5FF] text-black border-[#00E5FF] font-bold shadow-[0_0_10px_rgba(0,229,255,0.4)]' 
-                                            : 'bg-black border-gray-800 text-gray-500 hover:border-[#00E5FF] hover:text-[#00E5FF]'
-                                        }`}
-                                    >
-                                        {ext}
-                                    </button>
-                                ))}
-                            </div>
-                            <div className="relative">
-                                <input 
-                                    type="text" 
-                                    value={camouflageExt}
-                                    onChange={(e) => setCamouflageExt(e.target.value)}
-                                    className="w-full bg-black/50 border border-[#00E5FF]/30 text-[#00E5FF] text-xs p-2 rounded focus:border-[#00E5FF] focus:outline-none focus:shadow-[0_0_10px_rgba(0,229,255,0.2)] font-mono placeholder-gray-700"
-                                    placeholder="CUSTOM EXTENSION (E.G. .XYZ)"
-                                />
-                            </div>
-                        </div>
-                    )}
-                 </div>
             )}
 
             {/* Actions */}

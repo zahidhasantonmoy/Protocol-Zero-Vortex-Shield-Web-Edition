@@ -67,7 +67,6 @@ const App: React.FC = () => {
   }, []);
 
   // 3. Save State Logic
-  // We use a Ref to hold current state for the interval closure
   const stateRef = useRef({ mode, file, password, algorithm, camouflageMode, camouflageExt });
   
   useEffect(() => {
@@ -82,18 +81,18 @@ const App: React.FC = () => {
           camouflageMode: s.camouflageMode,
           camouflageExt: s.camouflageExt,
           fileDetails: s.file ? { name: s.file.name, size: s.file.size } : null,
-          password: s.password, // Save password input status for resume convenience
+          password: s.password, 
           timestamp: Date.now()
       };
       localStorage.setItem(STORAGE_KEY, JSON.stringify(stateToSave));
   };
 
-  // 3a. Save on User Actions (Dependency Change)
+  // 3a. Save on User Actions
   useEffect(() => {
       saveCurrentState();
   }, [mode, algorithm, camouflageMode, camouflageExt, file, password]);
 
-  // 3b. Save on Regular Intervals (30s heartbeat)
+  // 3b. Save on Regular Intervals
   useEffect(() => {
       const interval = setInterval(saveCurrentState, 30000);
       return () => clearInterval(interval);
@@ -107,9 +106,8 @@ const App: React.FC = () => {
   // 5. Inactivity Timer
   useEffect(() => {
     const handleInactivityTimeout = () => {
-        // Prevent wiping if user is in the middle of a long encryption process
         if (processingRef.current) {
-            resetTimer(); // Retry later if processing
+            resetTimer(); 
             return; 
         }
         
@@ -126,13 +124,11 @@ const App: React.FC = () => {
         inactivityTimerRef.current = setTimeout(handleInactivityTimeout, INACTIVITY_LIMIT_MS);
     };
 
-    // Events to track activity
     window.addEventListener('mousemove', resetTimer);
     window.addEventListener('keydown', resetTimer);
     window.addEventListener('click', resetTimer);
     window.addEventListener('dragover', resetTimer);
 
-    // Initialize timer
     resetTimer();
 
     return () => {
@@ -519,7 +515,7 @@ const App: React.FC = () => {
     <div className="min-h-screen flex flex-col items-center justify-center p-4 relative">
       {/* Background Matrix Rain Effect */}
       <div className="absolute inset-0 pointer-events-none opacity-5" style={{ 
-          backgroundImage: 'linear-gradient(0deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent)',
+          backgroundImage: 'linear-gradient(0deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent)',
           backgroundSize: '50px 50px'
       }}></div>
 
@@ -730,6 +726,7 @@ const App: React.FC = () => {
                         label={isProcessing ? "ENCRYPTING..." : "ACTIVATE SHIELD"} 
                         onClick={handleEncrypt} 
                         disabled={!file || !password || isProcessing || isScanning} 
+                        isLoading={isProcessing}
                     />
                 )}
                 {mode === AppMode.DECRYPT && (
@@ -737,6 +734,7 @@ const App: React.FC = () => {
                         label={isProcessing ? "DECRYPTING..." : "UNLOCK VAULT"} 
                         onClick={handleDecrypt}
                         disabled={!file || !password || isProcessing || isScanning}
+                        isLoading={isProcessing}
                     />
                 )}
                 {mode === AppMode.STEGANO && (
@@ -746,11 +744,13 @@ const App: React.FC = () => {
                             variant="ghost"
                             onClick={handleSteganoDecrypt}
                             disabled={!file || !password || isProcessing || isScanning}
+                            isLoading={isProcessing}
                         />
                          <CyberButton 
                             label="EMBED" 
                             onClick={handleStegano}
                             disabled={!file || !coverImage || !password || isProcessing || isScanning}
+                            isLoading={isProcessing}
                         />
                      </div>
                 )}
@@ -760,6 +760,7 @@ const App: React.FC = () => {
                         variant="danger" 
                         onClick={handleIncinerateClick}
                         disabled={!file || isProcessing || isScanning}
+                        isLoading={isProcessing}
                     />
                 )}
             </div>

@@ -1,9 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Shield, Lock, Unlock, Eye, Trash2, Cpu, AlertTriangle, Menu, X, Terminal, FileCode, Loader2, FileText, FileLock, Github, Linkedin, Facebook, Globe, Code } from 'lucide-react';
+import { Shield, Lock, Unlock, Eye, Trash2, AlertTriangle, Terminal, FileCode, Loader2, FileText, FileLock, Github, Linkedin, Facebook, Globe, Code, Settings, Save, RotateCcw, X } from 'lucide-react';
 import MatrixText from './components/MatrixText';
 import CyberButton from './components/CyberButton';
 import DropZone from './components/DropZone';
-import { encryptData, decryptData, embedInImage, extractFromImage } from './utils/crypto';
+import { encryptData, decryptData, embedInImage, extractFromImage, CryptoAlgorithm } from './utils/crypto';
 import { playSound } from './utils/audio';
 
 enum AppMode {
@@ -13,33 +13,117 @@ enum AppMode {
   INCINERATOR = 'INCINERATOR'
 }
 
+const STORAGE_KEY = 'vortex_shield_state';
+
 const App: React.FC = () => {
+  // --- State ---
   const [mode, setMode] = useState<AppMode>(AppMode.ENCRYPT);
   const [file, setFile] = useState<File | null>(null);
   const [coverImage, setCoverImage] = useState<File | null>(null);
   const [password, setPassword] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
+  const [isScanning, setIsScanning] = useState(false); // New state for file scan effect
   const [progress, setProgress] = useState(0);
-  const [log, setLog] = useState<string[]>(['> SYSTEM INITIALIZED', '> VORTEX SHIELD v2.0 READY']);
+  const [log, setLog] = useState<string[]>(['> SYSTEM INITIALIZED', '> VORTEX SHIELD v3.0 ONLINE']);
   const [duressMode, setDuressMode] = useState(false);
   const [showFakeSuccess, setShowFakeSuccess] = useState(false);
   const [showConfirmModal, setShowConfirmModal] = useState(false);
   
-  // Camouflage Mode State
+  // Advanced Settings
   const [camouflageMode, setCamouflageMode] = useState(false);
   const [camouflageExt, setCamouflageExt] = useState('.dll');
-  
-  const fakeExtensions = ['.dll', '.sys', '.dat', '.tmp', '.ini', '.bin'];
+  const [algorithm, setAlgorithm] = useState<CryptoAlgorithm>('AES-GCM');
+  const [resumeAvailable, setResumeAvailable] = useState(false);
 
   const logEndRef = useRef<HTMLDivElement>(null);
+  const fakeExtensions = ['.dll', '.sys', '.dat', '.tmp', '.ini', '.bin'];
+
+  // --- Effects ---
+
+  // Load State from LocalStorage on mount
+  useEffect(() => {
+    const savedState = localStorage.getItem(STORAGE_KEY);
+    if (savedState) {
+        try {
+            const parsed = JSON.parse(savedState);
+            // We check if there's meaningful state to resume
+            if (parsed.mode || parsed.algorithm) {
+                setResumeAvailable(true);
+            }
+        } catch (e) {
+            console.error("Failed to parse saved state", e);
+        }
+    }
+  }, []);
+
+  // Save State to LocalStorage whenever relevant config changes
+  useEffect(() => {
+      const stateToSave = {
+          mode,
+          algorithm,
+          camouflageMode,
+          camouflageExt,
+          lastActive: Date.now()
+      };
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(stateToSave));
+  }, [mode, algorithm, camouflageMode, camouflageExt]);
 
   // Auto-scroll logs
   useEffect(() => {
     logEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [log]);
 
+  // --- Handlers ---
+
+  const handleResumeSession = () => {
+      const savedState = localStorage.getItem(STORAGE_KEY);
+      if (savedState) {
+          try {
+              const parsed = JSON.parse(savedState);
+              if (parsed.mode) setMode(parsed.mode);
+              if (parsed.algorithm) setAlgorithm(parsed.algorithm);
+              if (parsed.camouflageMode !== undefined) setCamouflageMode(parsed.camouflageMode);
+              if (parsed.camouflageExt) setCamouflageExt(parsed.camouflageExt);
+              
+              setResumeAvailable(false);
+              addLog('> SESSION CONFIGURATION RESTORED');
+              addLog('> PLEASE RE-SELECT SOURCE FILES FOR SECURITY VERIFICATION');
+              playSound('success');
+          } catch (e) {
+              addLog('> ERROR: CORRUPT SESSION DATA');
+          }
+      }
+  };
+
   const addLog = (msg: string) => {
     setLog(prev => [...prev.slice(-10), `> ${msg}`]);
+  };
+
+  const handleFileSelect = (selectedFile: File) => {
+      setIsScanning(true);
+      setFile(null); // Reset current file
+      addLog(`SCANNING FILE: ${selectedFile.name}...`);
+      playSound('process');
+      
+      // Simulate scanning delay
+      setTimeout(() => {
+          setFile(selectedFile);
+          setIsScanning(false);
+          addLog(`FILE VERIFIED: ${(selectedFile.size/1024).toFixed(1)} KB`);
+          playSound('success');
+      }, 800);
+  };
+
+  const handleCoverSelect = (selectedFile: File) => {
+      setIsScanning(true);
+      setCoverImage(null);
+      addLog(`ANALYZING COVER IMAGE...`);
+      setTimeout(() => {
+          setCoverImage(selectedFile);
+          setIsScanning(false);
+          addLog(`COVER IMAGE ACCEPTED`);
+          playSound('success');
+      }, 600);
   };
 
   const handlePasswordChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -62,12 +146,10 @@ const App: React.FC = () => {
     }, 1000);
   };
 
-  // Processing Simulation for "Chunking" visual
   const processWithChunks = async (task: () => Promise<void>) => {
     setIsProcessing(true);
     setProgress(0);
     
-    // Fake chunking progress
     const interval = setInterval(() => {
         playSound('process');
         setProgress(prev => {
@@ -90,32 +172,45 @@ const App: React.FC = () => {
     }
   };
 
+  // MAGIC HEADER CONSTANTS for File Format
+  const VORTEX_MAGIC = "VORTEX"; // 6 bytes
+  const VERSION = 1;
+
   const handleEncrypt = async () => {
     if (!file || !password) return;
     
-    addLog(`INITIATING ENCRYPTION: ${file.name}`);
+    addLog(`INITIATING ENCRYPTION (${algorithm}): ${file.name}`);
     
     await processWithChunks(async () => {
         const arrayBuffer = await file.arrayBuffer();
-        const { encrypted, salt, iv } = await encryptData(arrayBuffer, password);
+        const { encrypted, salt, iv } = await encryptData(arrayBuffer, password, algorithm);
         
-        // Combine Salt + IV + Data for storage
-        const combined = new Uint8Array(salt.byteLength + iv.byteLength + encrypted.byteLength);
-        combined.set(salt, 0);
-        combined.set(iv, salt.byteLength);
-        combined.set(new Uint8Array(encrypted), salt.byteLength + iv.byteLength);
+        // --- Construct Header ---
+        // Format: [Magic(6)] [Ver(1)] [Algo(1)] [Salt(16)] [IV(Var)] [Data]
+        const encoder = new TextEncoder();
+        const magicBytes = encoder.encode(VORTEX_MAGIC);
+        const versionByte = new Uint8Array([VERSION]);
+        const algoByte = new Uint8Array([algorithm === 'AES-GCM' ? 1 : 2]); // 1=GCM, 2=CBC
         
-        const blob = new Blob([combined], { type: 'application/octet-stream' });
+        // Combine parts into Blob directly
+        const blobParts = [
+            magicBytes, 
+            versionByte, 
+            algoByte, 
+            salt, 
+            iv, 
+            encrypted
+        ];
+        
+        const blob = new Blob(blobParts, { type: 'application/octet-stream' });
         
         let fileName = `${file.name}.vortex`;
         
         if (camouflageMode) {
              const nameParts = file.name.split('.');
              const baseName = nameParts.length > 1 ? nameParts.slice(0, -1).join('.') : file.name;
-             
              let finalExt = camouflageExt;
              if (!finalExt.startsWith('.')) finalExt = '.' + finalExt;
-             
              fileName = `${baseName}${finalExt}`;
              addLog(`CAMOUFLAGE PROTOCOL ACTIVE: MASKING AS ${finalExt.toUpperCase()}`);
         }
@@ -130,7 +225,6 @@ const App: React.FC = () => {
     addLog(`INITIATING DECRYPTION: ${file.name}`);
 
     if (duressMode) {
-         // Fake decryption for duress
          await processWithChunks(async () => {
             await new Promise(r => setTimeout(r, 2000));
             setShowFakeSuccess(true);
@@ -141,14 +235,46 @@ const App: React.FC = () => {
 
     await processWithChunks(async () => {
         const arrayBuffer = await file.arrayBuffer();
-        const salt = new Uint8Array(arrayBuffer.slice(0, 16));
-        const iv = new Uint8Array(arrayBuffer.slice(16, 28));
-        const data = arrayBuffer.slice(28);
+        const view = new Uint8Array(arrayBuffer);
+        const encoder = new TextEncoder();
+        const magicBytes = encoder.encode(VORTEX_MAGIC);
+        
+        // --- Detect Header ---
+        let isNewFormat = true;
+        for(let i=0; i<magicBytes.length; i++) {
+            if (view[i] !== magicBytes[i]) {
+                isNewFormat = false;
+                break;
+            }
+        }
+
+        let salt, iv, data, usedAlgo: CryptoAlgorithm;
+
+        if (isNewFormat) {
+            // Read Header: Magic(6) + Ver(1) + Algo(1)
+            const algoId = view[7];
+            usedAlgo = algoId === 2 ? 'AES-CBC' : 'AES-GCM';
+            const ivLen = usedAlgo === 'AES-GCM' ? 12 : 16;
+            
+            const offset = 8;
+            salt = view.slice(offset, offset + 16);
+            iv = view.slice(offset + 16, offset + 16 + ivLen);
+            data = arrayBuffer.slice(offset + 16 + ivLen);
+            
+            addLog(`DETECTED FORMAT: VORTEX v${view[6]} / ${usedAlgo}`);
+        } else {
+            // Legacy Format (V2): Salt(16) + IV(12) + Data. Assumes GCM.
+            usedAlgo = 'AES-GCM';
+            salt = view.slice(0, 16);
+            iv = view.slice(16, 28);
+            data = arrayBuffer.slice(28);
+            addLog(`DETECTED FORMAT: LEGACY (ASSUMING AES-GCM)`);
+        }
         
         try {
-            const decrypted = await decryptData(data, salt, iv, password);
+            const decrypted = await decryptData(data, salt, iv, password, usedAlgo);
             const blob = new Blob([decrypted]);
-            downloadBlob(blob, file.name.replace('.vortex', ''));
+            downloadBlob(blob, file.name.replace('.vortex', '').replace(camouflageExt, ''));
             addLog('DECRYPTION COMPLETE. ACCESS GRANTED.');
         } catch (e) {
             throw new Error("INVALID PASSWORD OR CORRUPT FILE");
@@ -164,8 +290,8 @@ const App: React.FC = () => {
         const fileBuffer = await file.arrayBuffer();
         const coverBuffer = await coverImage.arrayBuffer();
         
-        const { encrypted, salt, iv } = await encryptData(fileBuffer, password);
-        const stegoBlob = await embedInImage(coverBuffer, encrypted, salt, iv);
+        const { encrypted, salt, iv } = await encryptData(fileBuffer, password, algorithm);
+        const stegoBlob = await embedInImage(coverBuffer, encrypted, salt, iv, algorithm);
         
         downloadBlob(stegoBlob, `camouflaged_${coverImage.name}`);
         addLog('GHOST MODE ACTIVE. PAYLOAD HIDDEN.');
@@ -173,7 +299,7 @@ const App: React.FC = () => {
   };
   
   const handleSteganoDecrypt = async () => {
-      if (!file || !password) return; // 'file' here is the image containing payload
+      if (!file || !password) return; 
       addLog(`SCANNING IMAGE FOR HIDDEN DATA...`);
       
        await processWithChunks(async () => {
@@ -184,8 +310,10 @@ const App: React.FC = () => {
             throw new Error("NO HIDDEN PAYLOAD FOUND");
         }
         
-        const { encryptedData, salt, iv } = result;
-        const decrypted = await decryptData(encryptedData, salt, iv, password);
+        const { encryptedData, salt, iv, algorithm: detectedAlgo } = result;
+        addLog(`PAYLOAD DETECTED: ${detectedAlgo}`);
+        
+        const decrypted = await decryptData(encryptedData, salt, iv, password, detectedAlgo);
         const blob = new Blob([decrypted]);
         downloadBlob(blob, 'revealed_payload.bin');
         addLog('PAYLOAD EXTRACTED SUCCESSFULLY.');
@@ -214,7 +342,6 @@ const App: React.FC = () => {
       
       addLog(`INITIATING DATA INCINERATION: ${file.name}`);
       await processWithChunks(async () => {
-          // Simulation of 3-pass overwrite
           for(let i=0; i<3; i++) {
               addLog(`PASS ${i+1}/3: OVERWRITING WITH ${i === 0 ? 'RANDOM BYTES' : i === 1 ? 'ZEROS' : 'ONES'}...`);
               await new Promise(r => setTimeout(r, 800));
@@ -223,6 +350,8 @@ const App: React.FC = () => {
           setFile(null);
       });
   };
+
+  // --- Render ---
 
   if (duressMode && showFakeSuccess) {
       return (
@@ -276,8 +405,19 @@ const App: React.FC = () => {
         <div className="bg-[#00E5FF]/10 p-3 flex justify-between items-center border-b border-[#00E5FF]/20 select-none">
             <div className="flex items-center gap-2 text-[#00E5FF]">
                 <Shield className="w-5 h-5 animate-pulse" />
-                <span className="font-bold tracking-widest text-sm">VORTEX SHIELD <span className="text-[10px] opacity-70">ULTIMATE_EDITION</span></span>
+                <span className="font-bold tracking-widest text-sm">VORTEX SHIELD <span className="text-[10px] opacity-70">ULTIMATE_EDITION_V3</span></span>
             </div>
+            
+            {resumeAvailable && (
+                <button 
+                    onClick={handleResumeSession}
+                    className="flex items-center gap-1 text-[10px] bg-[#00E5FF]/10 text-[#00E5FF] px-2 py-1 rounded border border-[#00E5FF]/30 hover:bg-[#00E5FF]/20 transition-colors animate-pulse"
+                >
+                    <RotateCcw className="w-3 h-3" />
+                    RESUME_SESSION
+                </button>
+            )}
+
             <div className="flex gap-2">
                 <div className="w-3 h-3 rounded-full bg-yellow-500/50"></div>
                 <div className="w-3 h-3 rounded-full bg-green-500/50"></div>
@@ -301,8 +441,6 @@ const App: React.FC = () => {
                         setCoverImage(null);
                         setLog([]);
                         setPassword('');
-                        setCamouflageMode(false);
-                        setCamouflageExt('.dll');
                         setShowConfirmModal(false);
                         addLog(`SWITCHING MODE TO ${item.id}...`);
                     }}
@@ -333,20 +471,56 @@ const App: React.FC = () => {
             {mode === AppMode.STEGANO && (
                 <>
                     <DropZone 
-                        onFileSelect={setCoverImage} 
+                        onFileSelect={handleCoverSelect} 
                         label="DROP COVER IMAGE (.PNG/.JPG)"
                         accept="image/*"
+                        selectedFile={coverImage}
                     />
-                    {coverImage && renderFileDetail(coverImage, () => setCoverImage(null), <FileCode className="w-5 h-5 text-[#00E5FF]" />)}
+                    {isScanning && !coverImage && !file && (
+                        <div className="text-center text-[#00E5FF] text-xs animate-pulse">
+                            <Loader2 className="w-4 h-4 animate-spin inline mr-2" />
+                            ANALYZING BITMAP STRUCTURE...
+                        </div>
+                    )}
+                    {coverImage && !isScanning && renderFileDetail(coverImage, () => setCoverImage(null), <FileCode className="w-5 h-5 text-[#00E5FF]" />)}
                 </>
             )}
 
             {/* Main File Drop */}
             <DropZone 
-                onFileSelect={setFile} 
+                onFileSelect={handleFileSelect} 
                 label={mode === AppMode.STEGANO ? "DROP PAYLOAD FILE" : "DROP TARGET FILE"}
             />
-            {file && renderFileDetail(file, () => setFile(null), mode === AppMode.STEGANO ? <FileLock className="w-5 h-5 text-[#00E5FF]" /> : <Shield className="w-5 h-5 text-[#00E5FF]" />)}
+            {isScanning && !file && (
+                 <div className="text-center text-[#00E5FF] text-xs animate-pulse">
+                     <Loader2 className="w-4 h-4 animate-spin inline mr-2" />
+                     VERIFYING INTEGRITY...
+                 </div>
+            )}
+            {file && !isScanning && renderFileDetail(file, () => setFile(null), mode === AppMode.STEGANO ? <FileLock className="w-5 h-5 text-[#00E5FF]" /> : <Shield className="w-5 h-5 text-[#00E5FF]" />)}
+
+            {/* Algorithm Selector (Encrypt/Stegano only) */}
+            {(mode === AppMode.ENCRYPT || mode === AppMode.STEGANO) && (
+                <div className="flex items-center gap-3 bg-[#00E5FF]/5 border border-[#00E5FF]/20 p-2 rounded">
+                    <Settings className="w-4 h-4 text-[#00E5FF]" />
+                    <span className="text-xs text-gray-400 font-bold tracking-wider">ALGORITHM:</span>
+                    <div className="flex gap-2">
+                        {(['AES-GCM', 'AES-CBC'] as CryptoAlgorithm[]).map((algo) => (
+                            <button
+                                key={algo}
+                                onClick={() => setAlgorithm(algo)}
+                                className={`text-[10px] px-2 py-1 rounded border transition-all ${
+                                    algorithm === algo 
+                                    ? 'bg-[#00E5FF] text-black border-[#00E5FF] font-bold' 
+                                    : 'border-gray-700 text-gray-500 hover:border-[#00E5FF]'
+                                }`}
+                            >
+                                {algo}
+                            </button>
+                        ))}
+                    </div>
+                </div>
+            )}
 
             {/* Password Field */}
             {mode !== AppMode.INCINERATOR && (
@@ -417,10 +591,12 @@ const App: React.FC = () => {
 
             {/* Actions */}
             <div className="flex justify-end items-center gap-4 pt-4 border-t border-[#00E5FF]/10">
-                {isProcessing && (
+                {(isProcessing || isScanning) && (
                     <div className="flex items-center gap-2 text-[#00E5FF] animate-pulse">
                         <Loader2 className="w-4 h-4 animate-spin" />
-                        <span className="text-xs font-mono">PROCESSING_DATA_STREAM...</span>
+                        <span className="text-xs font-mono">
+                            {isScanning ? 'SCANNING_SOURCE...' : 'PROCESSING_DATA_STREAM...'}
+                        </span>
                     </div>
                 )}
 
@@ -428,14 +604,14 @@ const App: React.FC = () => {
                     <CyberButton 
                         label={isProcessing ? "ENCRYPTING..." : "ACTIVATE SHIELD"} 
                         onClick={handleEncrypt} 
-                        disabled={!file || !password || isProcessing} 
+                        disabled={!file || !password || isProcessing || isScanning} 
                     />
                 )}
                 {mode === AppMode.DECRYPT && (
                     <CyberButton 
                         label={isProcessing ? "DECRYPTING..." : "UNLOCK VAULT"} 
                         onClick={handleDecrypt}
-                        disabled={!file || !password || isProcessing}
+                        disabled={!file || !password || isProcessing || isScanning}
                     />
                 )}
                 {mode === AppMode.STEGANO && (
@@ -444,12 +620,12 @@ const App: React.FC = () => {
                             label="EXTRACT" 
                             variant="ghost"
                             onClick={handleSteganoDecrypt}
-                            disabled={!file || !password || isProcessing}
+                            disabled={!file || !password || isProcessing || isScanning}
                         />
                          <CyberButton 
                             label="EMBED" 
                             onClick={handleStegano}
-                            disabled={!file || !coverImage || !password || isProcessing}
+                            disabled={!file || !coverImage || !password || isProcessing || isScanning}
                         />
                      </div>
                 )}
@@ -458,7 +634,7 @@ const App: React.FC = () => {
                         label={isProcessing ? "PURGING..." : "INCINERATE DATA"} 
                         variant="danger" 
                         onClick={handleIncinerateClick}
-                        disabled={!file || isProcessing}
+                        disabled={!file || isProcessing || isScanning}
                     />
                 )}
             </div>
@@ -539,8 +715,9 @@ const App: React.FC = () => {
       </div>
       
       {/* Footer Decoration */}
-      <div className="mt-4 text-[10px] text-gray-600 tracking-[0.2em] animate-pulse mb-8">
+      <div className="mt-4 text-[10px] text-gray-600 tracking-[0.2em] animate-pulse mb-8 flex items-center gap-2">
           SECURE CONNECTION ESTABLISHED // NODE_ID: 8X-99
+          {resumeAvailable && <span className="text-[#00E5FF]">| RESUME_READY</span>}
       </div>
 
       {/* Developer Footer */}

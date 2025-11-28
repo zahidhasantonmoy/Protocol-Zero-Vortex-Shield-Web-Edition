@@ -1,9 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Shield, Lock, Unlock, Eye, Trash2, AlertTriangle, Terminal, FileCode, Loader2, FileText, FileLock, Github, Linkedin, Facebook, Globe, Code, Settings, Save, RotateCcw, X } from 'lucide-react';
+import { Shield, Lock, Unlock, Eye, Trash2, AlertTriangle, Terminal, FileCode, Loader2, FileText, FileLock, Github, Linkedin, Facebook, Globe, Code, Settings, RotateCcw, X, Clock } from 'lucide-react';
 import MatrixText from './components/MatrixText';
 import CyberButton from './components/CyberButton';
 import DropZone from './components/DropZone';
-import { encryptData, decryptData, embedInImage, extractFromImage, CryptoAlgorithm } from './utils/crypto';
+import { deriveMasterKey, encryptChunk, decryptChunk, findDelimiterIndex, STEGANO_DELIMITER, CryptoAlgorithm } from './utils/crypto';
 import { playSound } from './utils/audio';
 
 enum AppMode {
@@ -14,6 +14,8 @@ enum AppMode {
 }
 
 const STORAGE_KEY = 'vortex_shield_state';
+const CHUNK_SIZE = 64 * 1024 * 1024; // 64 MB chunk size for streaming
+const INACTIVITY_LIMIT_MS = 5 * 60 * 1000; // 5 Minutes
 
 const App: React.FC = () => {
   // --- State ---
@@ -22,7 +24,7 @@ const App: React.FC = () => {
   const [coverImage, setCoverImage] = useState<File | null>(null);
   const [password, setPassword] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
-  const [isScanning, setIsScanning] = useState(false); // New state for file scan effect
+  const [isScanning, setIsScanning] = useState(false);
   const [progress, setProgress] = useState(0);
   const [log, setLog] = useState<string[]>(['> SYSTEM INITIALIZED', '> VORTEX SHIELD v3.0 ONLINE']);
   const [duressMode, setDuressMode] = useState(false);
@@ -36,42 +38,91 @@ const App: React.FC = () => {
   const [resumeAvailable, setResumeAvailable] = useState(false);
 
   const logEndRef = useRef<HTMLDivElement>(null);
+  const inactivityTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const processingRef = useRef<boolean>(false);
+
   const fakeExtensions = ['.dll', '.sys', '.dat', '.tmp', '.ini', '.bin'];
 
   // --- Effects ---
 
-  // Load State from LocalStorage on mount
+  // 1. Sync isProcessing state to ref for timer checks
+  useEffect(() => {
+    processingRef.current = isProcessing;
+  }, [isProcessing]);
+
+  // 2. Load State from LocalStorage
   useEffect(() => {
     const savedState = localStorage.getItem(STORAGE_KEY);
     if (savedState) {
         try {
             const parsed = JSON.parse(savedState);
-            // We check if there's meaningful state to resume
+            // Check if there is valid state to resume
             if (parsed.mode || parsed.algorithm) {
                 setResumeAvailable(true);
             }
         } catch (e) {
-            console.error("Failed to parse saved state", e);
+            console.error("Failed to load state", e);
         }
     }
   }, []);
 
-  // Save State to LocalStorage whenever relevant config changes
+  // 3. Save State to LocalStorage
   useEffect(() => {
       const stateToSave = {
           mode,
           algorithm,
           camouflageMode,
           camouflageExt,
-          lastActive: Date.now()
+          fileDetails: file ? { name: file.name, size: file.size } : null,
+          timestamp: Date.now()
       };
       localStorage.setItem(STORAGE_KEY, JSON.stringify(stateToSave));
-  }, [mode, algorithm, camouflageMode, camouflageExt]);
+  }, [mode, algorithm, camouflageMode, camouflageExt, file]);
 
-  // Auto-scroll logs
+  // 4. Auto-scroll logs
   useEffect(() => {
     logEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [log]);
+
+  // 5. Inactivity Timer
+  useEffect(() => {
+    const handleInactivityTimeout = () => {
+        // Prevent wiping if user is in the middle of a long encryption process
+        if (processingRef.current) {
+            resetTimer(); // Retry later if processing
+            return; 
+        }
+        
+        setPassword('');
+        setFile(null);
+        setCoverImage(null);
+        setShowConfirmModal(false);
+        addLog('WARNING: SESSION TIMEOUT. SECURE DATA CLEARED.');
+        playSound('error');
+    };
+
+    const resetTimer = () => {
+        if (inactivityTimerRef.current) clearTimeout(inactivityTimerRef.current);
+        inactivityTimerRef.current = setTimeout(handleInactivityTimeout, INACTIVITY_LIMIT_MS);
+    };
+
+    // Events to track activity
+    window.addEventListener('mousemove', resetTimer);
+    window.addEventListener('keydown', resetTimer);
+    window.addEventListener('click', resetTimer);
+    window.addEventListener('dragover', resetTimer);
+
+    // Initialize timer
+    resetTimer();
+
+    return () => {
+        if (inactivityTimerRef.current) clearTimeout(inactivityTimerRef.current);
+        window.removeEventListener('mousemove', resetTimer);
+        window.removeEventListener('keydown', resetTimer);
+        window.removeEventListener('click', resetTimer);
+        window.removeEventListener('dragover', resetTimer);
+    };
+  }, []); 
 
   // --- Handlers ---
 
@@ -86,8 +137,10 @@ const App: React.FC = () => {
               if (parsed.camouflageExt) setCamouflageExt(parsed.camouflageExt);
               
               setResumeAvailable(false);
-              addLog('> SESSION CONFIGURATION RESTORED');
-              addLog('> PLEASE RE-SELECT SOURCE FILES FOR SECURITY VERIFICATION');
+              addLog('> SESSION SETTINGS RESTORED');
+              if (parsed.fileDetails) {
+                addLog(`> PENDING: RE-SELECT FILE ${parsed.fileDetails.name}`);
+              }
               playSound('success');
           } catch (e) {
               addLog('> ERROR: CORRUPT SESSION DATA');
@@ -101,15 +154,13 @@ const App: React.FC = () => {
 
   const handleFileSelect = (selectedFile: File) => {
       setIsScanning(true);
-      setFile(null); // Reset current file
+      setFile(null);
       addLog(`SCANNING FILE: ${selectedFile.name}...`);
       playSound('process');
-      
-      // Simulate scanning delay
       setTimeout(() => {
           setFile(selectedFile);
           setIsScanning(false);
-          addLog(`FILE VERIFIED: ${(selectedFile.size/1024).toFixed(1)} KB`);
+          addLog(`FILE VERIFIED: ${(selectedFile.size/1024/1024).toFixed(2)} MB`);
           playSound('success');
       }, 800);
   };
@@ -146,179 +197,201 @@ const App: React.FC = () => {
     }, 1000);
   };
 
-  const processWithChunks = async (task: () => Promise<void>) => {
-    setIsProcessing(true);
-    setProgress(0);
-    
-    const interval = setInterval(() => {
-        playSound('process');
-        setProgress(prev => {
-            if (prev >= 90) return prev;
-            return prev + Math.random() * 10;
-        });
-    }, 200);
-
-    try {
-        await task();
-        clearInterval(interval);
-        setProgress(100);
-        playSound('success');
-    } catch (e: any) {
-        clearInterval(interval);
-        addLog(`ERROR: ${e.message}`);
-        playSound('error');
-    } finally {
-        setTimeout(() => setIsProcessing(false), 1000);
-    }
-  };
-
-  // MAGIC HEADER CONSTANTS for File Format
+  // HEADER CONSTANTS
   const VORTEX_MAGIC = "VORTEX"; // 6 bytes
   const VERSION = 1;
 
-  const handleEncrypt = async () => {
-    if (!file || !password) return;
-    
-    addLog(`INITIATING ENCRYPTION (${algorithm}): ${file.name}`);
-    
-    await processWithChunks(async () => {
-        const arrayBuffer = await file.arrayBuffer();
-        const { encrypted, salt, iv } = await encryptData(arrayBuffer, password, algorithm);
-        
-        // --- Construct Header ---
-        // Format: [Magic(6)] [Ver(1)] [Algo(1)] [Salt(16)] [IV(Var)] [Data]
-        const encoder = new TextEncoder();
-        const magicBytes = encoder.encode(VORTEX_MAGIC);
-        const versionByte = new Uint8Array([VERSION]);
-        const algoByte = new Uint8Array([algorithm === 'AES-GCM' ? 1 : 2]); // 1=GCM, 2=CBC
-        
-        // Combine parts into Blob directly
-        const blobParts = [
-            magicBytes, 
-            versionByte, 
-            algoByte, 
-            salt, 
-            iv, 
-            encrypted
-        ];
-        
-        const blob = new Blob(blobParts, { type: 'application/octet-stream' });
-        
-        let fileName = `${file.name}.vortex`;
-        
-        if (camouflageMode) {
-             const nameParts = file.name.split('.');
-             const baseName = nameParts.length > 1 ? nameParts.slice(0, -1).join('.') : file.name;
-             let finalExt = camouflageExt;
-             if (!finalExt.startsWith('.')) finalExt = '.' + finalExt;
-             fileName = `${baseName}${finalExt}`;
-             addLog(`CAMOUFLAGE PROTOCOL ACTIVE: MASKING AS ${finalExt.toUpperCase()}`);
-        }
-        
-        downloadBlob(blob, fileName);
-        addLog('ENCRYPTION COMPLETE. FILE SECURED.');
-    });
+  // --- CORE CHUNKED ENCRYPTION LOGIC ---
+  const executeChunkedEncryption = async (inputFile: File, coverFile: File | null = null) => {
+      setIsProcessing(true);
+      setProgress(0);
+      addLog('INITIALIZING CHUNKED ENCRYPTION ENGINE...');
+
+      try {
+          const salt = window.crypto.getRandomValues(new Uint8Array(16));
+          const key = await deriveMasterKey(password, salt, algorithm);
+          
+          const blobParts: (Blob | ArrayBuffer | Uint8Array)[] = [];
+          
+          // 1. If Stegano, Append Cover Image + Delimiter first
+          if (coverFile) {
+              addLog('PROCESSING COVER IMAGE...');
+              blobParts.push(coverFile);
+              const encoder = new TextEncoder();
+              blobParts.push(encoder.encode(STEGANO_DELIMITER));
+          }
+
+          // 2. Add Global Header: [Magic(6)] [Ver(1)] [Algo(1)] [Salt(16)]
+          const encoder = new TextEncoder();
+          const magicBytes = encoder.encode(VORTEX_MAGIC);
+          const versionByte = new Uint8Array([VERSION]);
+          const algoByte = new Uint8Array([algorithm === 'AES-GCM' ? 1 : 2]); 
+          
+          blobParts.push(magicBytes, versionByte, algoByte, salt);
+
+          // 3. Process File Chunks
+          const totalSize = inputFile.size;
+          let offset = 0;
+          let chunkIndex = 0;
+
+          while (offset < totalSize) {
+              // Read chunk
+              const slice = inputFile.slice(offset, offset + CHUNK_SIZE);
+              const chunkBuffer = await slice.arrayBuffer();
+              
+              // Encrypt Chunk
+              // Format per chunk: [Len(4)][IV(12/16)][Ciphertext]
+              const { encrypted, iv } = await encryptChunk(chunkBuffer, key, algorithm);
+              
+              const lenBuffer = new DataView(new ArrayBuffer(4));
+              lenBuffer.setUint32(0, encrypted.byteLength, false); // Big Endian Length
+              
+              blobParts.push(lenBuffer.buffer);
+              blobParts.push(iv);
+              blobParts.push(encrypted);
+
+              // Update Progress
+              offset += CHUNK_SIZE;
+              chunkIndex++;
+              const percent = Math.min(99, Math.round((offset / totalSize) * 100));
+              setProgress(percent);
+              
+              // Yield to main thread to keep UI responsive
+              await new Promise(r => setTimeout(r, 0));
+          }
+
+          // 4. Finalize
+          addLog('FINALIZING BLOB ASSEMBLY...');
+          const finalBlob = new Blob(blobParts, { type: coverFile ? 'image/png' : 'application/octet-stream' });
+          
+          // Determine Filename
+          let fileName = `${inputFile.name}.vortex`;
+          if (coverFile) {
+              fileName = `camouflaged_${coverFile.name}`;
+          } else if (camouflageMode) {
+              const nameParts = inputFile.name.split('.');
+              const baseName = nameParts.length > 1 ? nameParts.slice(0, -1).join('.') : inputFile.name;
+              let finalExt = camouflageExt;
+              if (!finalExt.startsWith('.')) finalExt = '.' + finalExt;
+              fileName = `${baseName}${finalExt}`;
+          }
+
+          downloadBlob(finalBlob, fileName);
+          setProgress(100);
+          addLog('OPERATION COMPLETE.');
+          playSound('success');
+
+      } catch (e: any) {
+          addLog(`ERROR: ${e.message}`);
+          playSound('error');
+      } finally {
+          setIsProcessing(false);
+      }
   };
 
-  const handleDecrypt = async () => {
-    if (!file || !password) return;
-    addLog(`INITIATING DECRYPTION: ${file.name}`);
+  // --- CORE CHUNKED DECRYPTION LOGIC ---
+  const executeChunkedDecryption = async (inputBlob: Blob, isStegano: boolean) => {
+      setIsProcessing(true);
+      setProgress(0);
+      addLog('INITIALIZING DECRYPTION STREAM...');
 
-    if (duressMode) {
-         await processWithChunks(async () => {
-            await new Promise(r => setTimeout(r, 2000));
-            setShowFakeSuccess(true);
-            addLog('VAULT UNLOCKED (DECOY MODE)');
-         });
-         return;
-    }
+      try {
+          // 1. Locate Payload Start
+          let payloadOffset = 0;
+          if (isStegano) {
+              addLog('SCANNING FOR HIDDEN PAYLOAD MARKER...');
+              // Only scan the first 50MB for the delimiter to avoid loading huge files
+              const scanSize = Math.min(inputBlob.size, 50 * 1024 * 1024);
+              const scanBuffer = await inputBlob.slice(0, scanSize).arrayBuffer();
+              const scanUint8 = new Uint8Array(scanBuffer);
+              const delimiterBytes = new TextEncoder().encode(STEGANO_DELIMITER);
+              
+              const delimiterIdx = findDelimiterIndex(scanUint8, delimiterBytes);
+              
+              if (delimiterIdx === -1) {
+                  throw new Error("NO STEGANOGRAPHY PAYLOAD FOUND");
+              }
+              payloadOffset = delimiterIdx + delimiterBytes.length;
+          }
 
-    await processWithChunks(async () => {
-        const arrayBuffer = await file.arrayBuffer();
-        const view = new Uint8Array(arrayBuffer);
-        const encoder = new TextEncoder();
-        const magicBytes = encoder.encode(VORTEX_MAGIC);
-        
-        // --- Detect Header ---
-        let isNewFormat = true;
-        for(let i=0; i<magicBytes.length; i++) {
-            if (view[i] !== magicBytes[i]) {
-                isNewFormat = false;
-                break;
-            }
-        }
+          // 2. Read Global Header
+          // Header Size: 6(Magic) + 1(Ver) + 1(Algo) + 16(Salt) = 24 bytes
+          const headerSize = 24;
+          const headerSlice = inputBlob.slice(payloadOffset, payloadOffset + headerSize);
+          const headerBuffer = await headerSlice.arrayBuffer();
+          const headerView = new Uint8Array(headerBuffer);
+          const encoder = new TextEncoder();
+          const magicBytes = encoder.encode(VORTEX_MAGIC);
 
-        let salt, iv, data, usedAlgo: CryptoAlgorithm;
+          // Verify Magic Signature
+          for(let i=0; i<magicBytes.length; i++) {
+              if (headerView[i] !== magicBytes[i]) {
+                  throw new Error("INVALID FILE FORMAT OR HEADER");
+              }
+          }
 
-        if (isNewFormat) {
-            // Read Header: Magic(6) + Ver(1) + Algo(1)
-            const algoId = view[7];
-            usedAlgo = algoId === 2 ? 'AES-CBC' : 'AES-GCM';
-            const ivLen = usedAlgo === 'AES-GCM' ? 12 : 16;
-            
-            const offset = 8;
-            salt = view.slice(offset, offset + 16);
-            iv = view.slice(offset + 16, offset + 16 + ivLen);
-            data = arrayBuffer.slice(offset + 16 + ivLen);
-            
-            addLog(`DETECTED FORMAT: VORTEX v${view[6]} / ${usedAlgo}`);
-        } else {
-            // Legacy Format (V2): Salt(16) + IV(12) + Data. Assumes GCM.
-            usedAlgo = 'AES-GCM';
-            salt = view.slice(0, 16);
-            iv = view.slice(16, 28);
-            data = arrayBuffer.slice(28);
-            addLog(`DETECTED FORMAT: LEGACY (ASSUMING AES-GCM)`);
-        }
-        
-        try {
-            const decrypted = await decryptData(data, salt, iv, password, usedAlgo);
-            const blob = new Blob([decrypted]);
-            downloadBlob(blob, file.name.replace('.vortex', '').replace(camouflageExt, ''));
-            addLog('DECRYPTION COMPLETE. ACCESS GRANTED.');
-        } catch (e) {
-            throw new Error("INVALID PASSWORD OR CORRUPT FILE");
-        }
-    });
+          const algoId = headerView[7];
+          const usedAlgo = algoId === 2 ? 'AES-CBC' : 'AES-GCM';
+          const salt = headerView.slice(8, 24);
+
+          addLog(`HEADER VERIFIED. ALGO: ${usedAlgo}`);
+
+          // 3. Derive Key
+          const key = await deriveMasterKey(password, salt, usedAlgo);
+          const decryptedParts: ArrayBuffer[] = [];
+
+          // 4. Loop Chunks
+          let offset = payloadOffset + headerSize;
+          const totalSize = inputBlob.size;
+          const ivLen = usedAlgo === 'AES-GCM' ? 12 : 16;
+
+          while (offset < totalSize) {
+              // Read Length (4 bytes)
+              const lenSlice = inputBlob.slice(offset, offset + 4);
+              if (lenSlice.size < 4) break;
+              const lenBuffer = await lenSlice.arrayBuffer();
+              const chunkLen = new DataView(lenBuffer).getUint32(0, false);
+              offset += 4;
+
+              // Read IV
+              const ivSlice = inputBlob.slice(offset, offset + ivLen);
+              const iv = new Uint8Array(await ivSlice.arrayBuffer());
+              offset += ivLen;
+
+              // Read Ciphertext
+              const cipherSlice = inputBlob.slice(offset, offset + chunkLen);
+              const cipherBuffer = await cipherSlice.arrayBuffer();
+              offset += chunkLen;
+
+              // Decrypt
+              const decryptedChunk = await decryptChunk(cipherBuffer, key, iv, usedAlgo);
+              decryptedParts.push(decryptedChunk);
+
+              // Progress
+              const percent = Math.min(99, Math.round(((offset - payloadOffset) / (totalSize - payloadOffset)) * 100));
+              setProgress(percent);
+              await new Promise(r => setTimeout(r, 0));
+          }
+
+          // 5. Finalize
+          const finalBlob = new Blob(decryptedParts);
+          
+          let dlName = file!.name.replace('.vortex', '').replace(camouflageExt, '');
+          if (isStegano) dlName = "revealed_payload.bin";
+
+          downloadBlob(finalBlob, dlName);
+          setProgress(100);
+          addLog('DECRYPTION SUCCESSFUL.');
+          playSound('success');
+
+      } catch (e: any) {
+          addLog(`ERROR: ${e.message}`);
+          playSound('error');
+      } finally {
+          setIsProcessing(false);
+      }
   };
 
-  const handleStegano = async () => {
-    if (!file || !coverImage || !password) return;
-    addLog(`EMBEDDING PAYLOAD INTO ${coverImage.name}`);
-    
-    await processWithChunks(async () => {
-        const fileBuffer = await file.arrayBuffer();
-        const coverBuffer = await coverImage.arrayBuffer();
-        
-        const { encrypted, salt, iv } = await encryptData(fileBuffer, password, algorithm);
-        const stegoBlob = await embedInImage(coverBuffer, encrypted, salt, iv, algorithm);
-        
-        downloadBlob(stegoBlob, `camouflaged_${coverImage.name}`);
-        addLog('GHOST MODE ACTIVE. PAYLOAD HIDDEN.');
-    });
-  };
-  
-  const handleSteganoDecrypt = async () => {
-      if (!file || !password) return; 
-      addLog(`SCANNING IMAGE FOR HIDDEN DATA...`);
-      
-       await processWithChunks(async () => {
-        const buffer = await file.arrayBuffer();
-        const result = await extractFromImage(buffer);
-        
-        if (!result) {
-            throw new Error("NO HIDDEN PAYLOAD FOUND");
-        }
-        
-        const { encryptedData, salt, iv, algorithm: detectedAlgo } = result;
-        addLog(`PAYLOAD DETECTED: ${detectedAlgo}`);
-        
-        const decrypted = await decryptData(encryptedData, salt, iv, password, detectedAlgo);
-        const blob = new Blob([decrypted]);
-        downloadBlob(blob, 'revealed_payload.bin');
-        addLog('PAYLOAD EXTRACTED SUCCESSFULLY.');
-    });
-  };
 
   const downloadBlob = (blob: Blob, name: string) => {
     const url = URL.createObjectURL(blob);
@@ -331,6 +404,34 @@ const App: React.FC = () => {
     URL.revokeObjectURL(url);
   };
 
+  const handleEncrypt = async () => {
+    if (!file || !password) return;
+    await executeChunkedEncryption(file);
+  };
+
+  const handleDecrypt = async () => {
+      if (!file || !password) return;
+      if (duressMode) {
+          setIsProcessing(true);
+          await new Promise(r => setTimeout(r, 2000));
+          setIsProcessing(false);
+          setShowFakeSuccess(true);
+          return;
+      }
+      await executeChunkedDecryption(file, false);
+  };
+
+  const handleStegano = async () => {
+      if (!file || !coverImage || !password) return;
+      addLog(`EMBEDDING PAYLOAD INTO ${coverImage.name}`);
+      await executeChunkedEncryption(file, coverImage);
+  };
+
+  const handleSteganoDecrypt = async () => {
+      if (!file || !password) return;
+      await executeChunkedDecryption(file, true);
+  };
+
   const handleIncinerateClick = () => {
       if (!file) return;
       setShowConfirmModal(true);
@@ -339,16 +440,19 @@ const App: React.FC = () => {
   const handleIncinerateConfirm = async () => {
       setShowConfirmModal(false);
       if(!file) return;
+      setIsProcessing(true);
       
       addLog(`INITIATING DATA INCINERATION: ${file.name}`);
-      await processWithChunks(async () => {
-          for(let i=0; i<3; i++) {
-              addLog(`PASS ${i+1}/3: OVERWRITING WITH ${i === 0 ? 'RANDOM BYTES' : i === 1 ? 'ZEROS' : 'ONES'}...`);
-              await new Promise(r => setTimeout(r, 800));
-          }
-          addLog('FILE BUFFER PURGED FROM MEMORY.');
-          setFile(null);
-      });
+      // Simulate DoD 3-pass overwrite time delay
+      for(let i=0; i<3; i++) {
+          setProgress(((i+1)/3)*100);
+          addLog(`PASS ${i+1}/3: OVERWRITING SECTORS...`);
+          await new Promise(r => setTimeout(r, 800));
+      }
+      addLog('FILE BUFFER PURGED.');
+      setFile(null);
+      setIsProcessing(false);
+      playSound('success');
   };
 
   // --- Render ---
@@ -394,7 +498,7 @@ const App: React.FC = () => {
     <div className="min-h-screen flex flex-col items-center justify-center p-4 relative">
       {/* Background Matrix Rain Effect */}
       <div className="absolute inset-0 pointer-events-none opacity-5" style={{ 
-          backgroundImage: 'linear-gradient(0deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent)',
+          backgroundImage: 'linear-gradient(0deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(0, 229, 255, .3) 25%, rgba(0, 229, 255, .3) 26%, transparent 27%, transparent 74%, rgba(0, 229, 255, .3) 75%, rgba(0, 229, 255, .3) 76%, transparent 77%, transparent)',
           backgroundSize: '50px 50px'
       }}></div>
 

@@ -1033,6 +1033,11 @@ const App: React.FC = () => {
                     </div>
                 </div>
 
+                {/* Developer Info Footer */}
+                <div className="p-4 bg-black/50">
+                    <DeveloperInfo />
+                </div>
+
                 {/* Confirmation Modal */}
                 {showConfirmModal && (
                     <div className="absolute inset-0 z-50 bg-black/90 flex items-center justify-center p-6">

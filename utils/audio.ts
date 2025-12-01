@@ -1,7 +1,15 @@
 const AudioContext = window.AudioContext || (window as any).webkitAudioContext;
 const audioCtx = new AudioContext();
 
+let isMuted = false;
+
+export const setGlobalMute = (muted: boolean) => {
+  isMuted = muted;
+};
+
 export const playSound = (type: 'hover' | 'click' | 'success' | 'error' | 'process' | 'lock') => {
+  if (isMuted) return;
+
   if (audioCtx.state === 'suspended') {
     audioCtx.resume();
   }

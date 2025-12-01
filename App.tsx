@@ -1,15 +1,17 @@
 
 import React, { useState, useEffect, useRef } from 'react';
-import { Shield, Lock, Unlock, Eye, Trash2, AlertTriangle, Terminal, FileCode, Loader2, FileText, FileLock, Github, Linkedin, Facebook, Globe, Code, Settings, RotateCcw, X, Clock, Copy, Check, Key, FileArchive, Fingerprint, Info, Dna, FileDown, Type, Save, Image as ImageIcon, Grid, ChevronDown, ScanEye, Flame, ShieldCheck, Briefcase } from 'lucide-react';
-import MatrixText from './components/MatrixText';
+import { Shield, Lock, Unlock, Eye, Trash2, AlertTriangle, Terminal, FileCode, Loader2, FileText, FileLock, Github, Linkedin, Facebook, Globe, Code, Settings, RotateCcw, X, Clock, Copy, Check, Key, FileArchive, Fingerprint, Info, Dna, FileDown, Type, Save, Image as ImageIcon, Grid, ChevronDown, ScanEye, Flame, ShieldCheck, Briefcase, Volume2, VolumeX, Power, Timer } from 'lucide-react';
 import CyberButton from './components/CyberButton';
 import DeveloperInfo from './components/DeveloperInfo';
-import DropZone from './components/DropZone';
+import LogViewer, { LogEntry } from './components/LogViewer';
+import SettingsPanel from './components/SettingsPanel';
+import Navigation, { AppMode } from './components/Navigation';
+import FileManager from './components/FileManager';
 import { CryptoAlgorithm, hashData, CHUNK_SIZE } from './utils/crypto';
 import { formatFileSize } from './utils/formatting';
 import { registerBioLock, authenticateBioLock, isWebAuthnAvailable } from './utils/webauthn';
 import { analyzeEntropy, EntropyResult } from './utils/entropy';
-import { playSound } from './utils/audio';
+import { playSound, setGlobalMute } from './utils/audio';
 
 // Local types for worker communication
 type WorkerRequest =
@@ -21,21 +23,7 @@ type WorkerResponse =
     | { type: 'COMPLETE'; blob: Blob; fileName: string; log: string }
     | { type: 'ERROR'; error: string };
 
-enum AppMode {
-    ENCRYPT = 'ENCRYPT',
-    DECRYPT = 'DECRYPT',
-    STEGANO = 'STEGANO',
-    INCINERATOR = 'INCINERATOR',
-    TEXT = 'TEXT_VAULT'
-}
-
 const STORAGE_KEY = 'vortex_shield_state';
-const INACTIVITY_LIMIT_MS = 5 * 60 * 1000;
-
-interface LogEntry {
-    text: string;
-    timestamp: string;
-}
 
 // Utility moved outside component
 const downloadBlob = (blob: Blob, name: string) => {
@@ -74,7 +62,7 @@ const App: React.FC = () => {
     const [progress, setProgress] = useState(0);
     const [log, setLog] = useState<LogEntry[]>([
         { text: 'SYSTEM INITIALIZED', timestamp: new Date().toLocaleTimeString() },
-        { text: 'VORTEX SHIELD v5.0 [WORKER_ACTIVE]', timestamp: new Date().toLocaleTimeString() }
+        { text: 'VORTEX SHIELD v5.1 [WORKER_ACTIVE]', timestamp: new Date().toLocaleTimeString() }
     ]);
     const [duressMode, setDuressMode] = useState(false);
     const [showFakeSuccess, setShowFakeSuccess] = useState(false);
@@ -88,7 +76,7 @@ const App: React.FC = () => {
     const [algorithm, setAlgorithm] = useState<CryptoAlgorithm>('AES-GCM');
     const [resumeAvailable, setResumeAvailable] = useState(false);
 
-    // New Features
+    // New Features v5.1
     const [keyFile, setKeyFile] = useState<File | null>(null);
     const [keyFileHash, setKeyFileHash] = useState<string>('');
     const [useCompression, setUseCompression] = useState(false);
@@ -96,6 +84,9 @@ const App: React.FC = () => {
     const [isLocked, setIsLocked] = useState(false);
     const [bioLockEnabled, setBioLockEnabled] = useState(false);
     const [theme, setTheme] = useState<'cyberpunk' | 'corporate'>('cyberpunk');
+    const [isMuted, setIsMuted] = useState(false);
+    const [isBooting, setIsBooting] = useState(true);
+    const [autoLockDuration, setAutoLockDuration] = useState(5 * 60 * 1000); // Default 5 mins
 
     const tc = theme === 'cyberpunk'
         ? {
@@ -124,18 +115,29 @@ const App: React.FC = () => {
     const [lastOutput, setLastOutput] = useState<string | null>(null);
     const [copySuccess, setCopySuccess] = useState(false);
 
-    const logEndRef = useRef<HTMLDivElement>(null);
     const inactivityTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const lastActivityRef = useRef<number>(Date.now());
     const processingRef = useRef<boolean>(false);
     const workerRef = useRef<Worker | null>(null);
     const resetTimerRef = useRef<(force?: boolean) => void>(() => { });
 
-    const fakeExtensions = ['.dll', '.sys', '.dat', '.tmp', '.ini', '.bin'];
-
     // --- Effects ---
 
-    // Initialize Worker using standard URL constructor
+    // Boot Sequence
+    useEffect(() => {
+        const timer = setTimeout(() => {
+            setIsBooting(false);
+            playSound('success');
+        }, 2500);
+        return () => clearTimeout(timer);
+    }, []);
+
+    // Mute Toggle
+    useEffect(() => {
+        setGlobalMute(isMuted);
+    }, [isMuted]);
+
+    // Initialize Worker
     useEffect(() => {
         workerRef.current = new Worker(new URL('./worker.ts', import.meta.url), { type: 'module' });
         return () => {
@@ -156,6 +158,8 @@ const App: React.FC = () => {
                 if (parsed.mode || parsed.algorithm || parsed.password) {
                     setResumeAvailable(true);
                 }
+                if (parsed.autoLockDuration) setAutoLockDuration(parsed.autoLockDuration);
+                if (parsed.isMuted !== undefined) setIsMuted(parsed.isMuted);
             } catch (e) {
                 console.error("Failed to load state", e);
             }
@@ -163,11 +167,11 @@ const App: React.FC = () => {
     }, []);
 
     // Save State
-    const stateRef = useRef({ mode, files, password, algorithm, camouflageMode, camouflageExt, useCompression, textInput, bioLockEnabled });
+    const stateRef = useRef({ mode, files, password, algorithm, camouflageMode, camouflageExt, useCompression, textInput, bioLockEnabled, autoLockDuration, isMuted });
 
     useEffect(() => {
-        stateRef.current = { mode, files, password, algorithm, camouflageMode, camouflageExt, useCompression, textInput, bioLockEnabled };
-    }, [mode, files, password, algorithm, camouflageMode, camouflageExt, useCompression, textInput, bioLockEnabled]);
+        stateRef.current = { mode, files, password, algorithm, camouflageMode, camouflageExt, useCompression, textInput, bioLockEnabled, autoLockDuration, isMuted };
+    }, [mode, files, password, algorithm, camouflageMode, camouflageExt, useCompression, textInput, bioLockEnabled, autoLockDuration, isMuted]);
 
     const saveCurrentState = () => {
         const s = stateRef.current;
@@ -181,20 +185,18 @@ const App: React.FC = () => {
             password: s.password,
             textInput: s.textInput,
             bioLockEnabled: s.bioLockEnabled,
+            autoLockDuration: s.autoLockDuration,
+            isMuted: s.isMuted,
             timestamp: Date.now()
         };
         localStorage.setItem(STORAGE_KEY, JSON.stringify(stateToSave));
     };
 
-    useEffect(() => { saveCurrentState(); }, [mode, algorithm, camouflageMode, camouflageExt, files, password, useCompression, textInput, bioLockEnabled]);
+    useEffect(() => { saveCurrentState(); }, [mode, algorithm, camouflageMode, camouflageExt, files, password, useCompression, textInput, bioLockEnabled, autoLockDuration, isMuted]);
     useEffect(() => {
         const interval = setInterval(saveCurrentState, 30000);
         return () => clearInterval(interval);
     }, []);
-
-    useEffect(() => {
-        logEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-    }, [log]);
 
     // Keyboard Shortcuts
     useEffect(() => {
@@ -254,7 +256,7 @@ const App: React.FC = () => {
             if (!force && now - lastActivityRef.current < 1000) return;
             lastActivityRef.current = now;
             if (inactivityTimerRef.current) clearTimeout(inactivityTimerRef.current);
-            inactivityTimerRef.current = setTimeout(handleInactivityTimeout, INACTIVITY_LIMIT_MS);
+            inactivityTimerRef.current = setTimeout(handleInactivityTimeout, stateRef.current.autoLockDuration);
         };
 
         resetTimerRef.current = resetTimer;
@@ -273,7 +275,7 @@ const App: React.FC = () => {
             window.removeEventListener('click', () => resetTimer());
             window.removeEventListener('dragover', () => resetTimer());
         };
-    }, []);
+    }, [autoLockDuration]); // Re-run when duration changes
 
     // --- Helpers ---
     const calculateStrength = (pass: string) => {
@@ -733,48 +735,24 @@ const App: React.FC = () => {
 
     // --- Render ---
 
-    const renderCoverImageDetail = (file: File) => (
-        <div className={`flex items-center justify-between ${tc.bgOp} border ${tc.border} border-opacity-30 p-2 rounded mt-2`}>
-            <div className="flex items-center gap-2 overflow-hidden">
-                <ImageIcon className={`w-4 h-4 ${tc.text}`} />
-                <div className="flex flex-col min-w-0">
-                    <span className={`text-xs ${tc.text} font-mono truncate`}>{file.name}</span>
-                    <span className="text-[10px] text-gray-500">{formatFileSize(file.size)}</span>
+    // Boot Screen
+    if (isBooting) {
+        return (
+            <div className="min-h-screen bg-black flex flex-col items-center justify-center font-mono text-[#00E5FF]">
+                <div className="space-y-2">
+                    <div className="text-xl font-bold tracking-widest animate-pulse">INITIALIZING VORTEX SHIELD v5.1...</div>
+                    <div className="text-xs text-gray-500">LOADING KERNEL MODULES... OK</div>
+                    <div className="text-xs text-gray-500">MOUNTING CRYPTO ENGINE... OK</div>
+                    <div className="text-xs text-gray-500">ESTABLISHING SECURE ENVIRONMENT... OK</div>
+                </div>
+                <div className="mt-8 w-64 h-1 bg-gray-900 rounded overflow-hidden">
+                    <div className="h-full bg-[#00E5FF] animate-[width_2s_ease-in-out_forwards]" style={{ width: '0%' }}></div>
                 </div>
             </div>
-            <button onClick={() => setCoverImage(null)} className="text-gray-500 hover:text-red-500 p-1">
-                <X className="w-4 h-4" />
-            </button>
-        </div>
-    );
+        );
+    }
 
-    const renderFileList = () => (
-        <div className="space-y-2 max-h-32 overflow-y-auto pr-1 mt-2">
-            {files.map((f, i) => (
-                <div key={i} className={`flex items-center justify-between bg-gray-900 border border-gray-800 p-2 rounded group hover:${tc.border} transition-colors`}>
-                    <div className="flex items-center gap-2 overflow-hidden">
-                        <FileCode className={`w-4 h-4 text-gray-500 group-hover:${tc.text}`} />
-                        <div className="flex flex-col min-w-0">
-                            <span className="text-xs text-gray-300 group-hover:text-white font-mono truncate">{f.name}</span>
-                            <span className="text-[10px] text-gray-600">{formatFileSize(f.size)}</span>
-                        </div>
-                    </div>
-                    <button
-                        onClick={(e) => {
-                            e.stopPropagation();
-                            setFiles(prev => prev.filter((_, idx) => idx !== i));
-                            playSound('click');
-                        }}
-                        className="text-gray-600 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity p-1"
-                    >
-                        <X className="w-4 h-4" />
-                    </button>
-                </div>
-            ))}
-        </div>
-    );
-
-    // --- Decoy Render ---
+    // Decoy Render
     if (decoyMode) {
         return (
             <div className="min-h-screen bg-white text-black font-sans text-xs flex flex-col overflow-hidden">
@@ -888,10 +866,27 @@ const App: React.FC = () => {
                 <div className={`${tc.bgOp} p-3 flex justify-between items-center border-b ${tc.border} border-opacity-20 select-none`}>
                     <div className={`flex items-center gap-2 ${tc.text}`}>
                         <Shield className="w-5 h-5 animate-pulse" />
-                        <span className="font-bold tracking-widest text-sm">{theme === 'cyberpunk' ? 'VORTEX SHIELD' : 'DATA PROTECTOR'} <span className="text-[10px] opacity-70">v5.0</span></span>
+                        <span className="font-bold tracking-widest text-sm">{theme === 'cyberpunk' ? 'VORTEX SHIELD' : 'DATA PROTECTOR'} <span className="text-[10px] opacity-70">v5.1</span></span>
                     </div>
 
                     <div className="flex items-center gap-2">
+                        {/* Mobile Panic Button */}
+                        <button
+                            onClick={handleKillSwitch}
+                            className="sm:hidden p-1.5 rounded bg-red-500/20 text-red-500 hover:bg-red-500 hover:text-black transition-colors"
+                            title="EMERGENCY PURGE"
+                        >
+                            <Power className="w-4 h-4" />
+                        </button>
+
+                        <button
+                            onClick={() => setIsMuted(!isMuted)}
+                            className={`p-1.5 rounded transition-colors ${tc.text} hover:bg-opacity-20 hover:bg-current`}
+                            title={isMuted ? "Unmute" : "Mute"}
+                        >
+                            {isMuted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
+                        </button>
+
                         <button
                             onClick={() => setTheme(prev => prev === 'cyberpunk' ? 'corporate' : 'cyberpunk')}
                             className={`p-1.5 rounded transition-colors ${tc.text} hover:bg-opacity-20 hover:bg-current`}
@@ -920,38 +915,17 @@ const App: React.FC = () => {
                 </div>
 
                 {/* Navigation */}
-                <div className={`grid grid-cols-5 border-b ${tc.border} border-opacity-20 text-xs sm:text-sm`}>
-                    {[
-                        { id: AppMode.ENCRYPT, icon: Lock, activeIcon: ShieldCheck, label: 'ENCRYPT' },
-                        { id: AppMode.DECRYPT, icon: Unlock, activeIcon: Key, label: 'DECRYPT' },
-                        { id: AppMode.STEGANO, icon: Eye, activeIcon: ScanEye, label: 'GHOST' },
-                        { id: AppMode.TEXT, icon: Type, activeIcon: FileText, label: 'TEXT' },
-                        { id: AppMode.INCINERATOR, icon: Trash2, activeIcon: Flame, label: 'BURN' }
-                    ].map((item) => {
-                        const Icon = mode === item.id ? item.activeIcon : item.icon;
-                        return (
-                            <button
-                                key={item.id}
-                                onClick={() => {
-                                    setMode(item.id);
-                                    setFiles([]);
-                                    setCoverImage(null);
-                                    setLog([]);
-                                    setPassword('');
-                                    setTextInput('');
-                                    setPreviewUrl(null);
-                                    setLastOutput(null);
-                                    setShowConfirmModal(false);
-                                    playSound('click');
-                                }}
-                                className={`p-3 flex flex-col items-center gap-1 transition-colors ${mode === item.id ? `${tc.bgOp} ${tc.text} font-bold` : `text-gray-400 hover:${tc.text} hover:${tc.bgOp}`}`}
-                            >
-                                <Icon className="w-4 h-4" />
-                                {item.label}
-                            </button>
-                        );
-                    })}
-                </div>
+                <Navigation mode={mode} setMode={setMode} onModeChange={() => {
+                    setFiles([]);
+                    setCoverImage(null);
+                    setLog([]);
+                    setPassword('');
+                    setTextInput('');
+                    setPreviewUrl(null);
+                    setLastOutput(null);
+                    setShowConfirmModal(false);
+                    playSound('click');
+                }} tc={tc} />
 
                 {/* Content */}
                 <div className="p-6 space-y-6">
@@ -997,69 +971,30 @@ const App: React.FC = () => {
                                 </div>
                             )}
 
-                            {mode === AppMode.STEGANO && (
-                                <>
-                                    <DropZone
-                                        onFilesSelect={handleCoverSelect}
-                                        label="DROP COVER IMAGE"
-                                        accept="image/*"
-                                        multiple={false}
-                                    />
-                                    {coverImage && renderCoverImageDetail(coverImage)}
-                                </>
-                            )}
-
-                            <DropZone
+                            <FileManager
+                                files={files}
                                 onFilesSelect={handleFilesSelect}
-                                label={mode === AppMode.STEGANO ? "DROP PAYLOAD" : "DROP TARGET FILES"}
+                                onRemoveFile={(i) => setFiles(prev => prev.filter((_, idx) => idx !== i))}
+                                coverImage={coverImage}
+                                onCoverSelect={handleCoverSelect}
+                                onRemoveCover={() => setCoverImage(null)}
+                                mode={mode}
+                                tc={tc}
                             />
-                            {files.length > 0 && renderFileList()}
                         </>
                     )}
 
                     {/* Settings & Key */}
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                        <div className="space-y-3">
-                            {(mode === AppMode.ENCRYPT || mode === AppMode.STEGANO || mode === AppMode.TEXT) && (
-                                <div className="flex items-center justify-between bg-[#00E5FF] bg-opacity-5 border border-[#00E5FF] border-opacity-20 p-2 rounded">
-                                    <div className="flex items-center gap-2">
-                                        <Settings className="w-4 h-4 text-[#00E5FF]" />
-                                        <span className="text-xs text-gray-400 font-bold">ALGO</span>
-                                    </div>
-                                    <div className="flex gap-1">
-                                        {(['AES-GCM', 'AES-CBC'] as CryptoAlgorithm[]).map((algo) => (
-                                            <button
-                                                key={algo}
-                                                onClick={() => setAlgorithm(algo)}
-
-                                                className={`text-[9px] px-2 py-1 rounded border transition-all ${algorithm === algo
-                                                    ? `${tc.bgOp} ${tc.text} ${tc.border} font-bold`
-                                                    : `border-gray-700 text-gray-500 hover:${tc.border}`
-                                                    }`}
-                                            >
-                                                {algo}
-                                            </button>
-                                        ))}
-                                    </div>
-                                </div>
-                            )}
-                        </div>
-
-                        {(mode === AppMode.ENCRYPT || mode === AppMode.STEGANO || mode === AppMode.TEXT) && (
-                            <div className="space-y-3">
-                                <div
-                                    onClick={() => setUseCompression(!useCompression)}
-                                    className={`flex items-center justify-between p-2 rounded border cursor-pointer transition-all ${useCompression ? `${tc.bgOp} ${tc.border}` : `border-gray-800 hover:${tc.border}`}`}
-                                >
-                                    <div className="flex items-center gap-2">
-                                        <FileArchive className={`w-4 h-4 ${useCompression ? tc.text : 'text-gray-500'}`} />
-                                        <span className={`text-xs font-bold ${useCompression ? tc.text : 'text-gray-500'}`}>COMPRESSION</span>
-                                    </div>
-                                    <div className={`w-3 h-3 rounded-full ${useCompression ? `${tc.bg} shadow-[0_0_8px_${tc.accent}]` : 'bg-gray-800'}`} style={useCompression ? { backgroundColor: tc.accent } : {}}></div>
-                                </div>
-                            </div>
-                        )}
-                    </div>
+                    <SettingsPanel
+                        mode={mode}
+                        algorithm={algorithm}
+                        setAlgorithm={setAlgorithm}
+                        useCompression={useCompression}
+                        setUseCompression={setUseCompression}
+                        autoLockDuration={autoLockDuration}
+                        setAutoLockDuration={setAutoLockDuration}
+                        tc={tc}
+                    />
 
                     {/* Password */}
                     {mode !== AppMode.INCINERATOR && (
@@ -1075,11 +1010,15 @@ const App: React.FC = () => {
                             <button onClick={handleGeneratePassword} className={`absolute right-2 top-2 p-1 ${tc.text} hover:bg-opacity-20 hover:bg-current rounded`} title="Generate Key">
                                 <Dna className="w-4 h-4" />
                             </button>
-                            <div className="mt-1 flex gap-1 h-1">
-                                {[1, 2, 3, 4].map((level) => (
-                                    <div key={level} className={`flex-1 h-full rounded-sm transition-all ${passwordStrength >= level ? (level === 1 ? 'bg-red-500' : level === 2 ? 'bg-orange-500' : level === 3 ? 'bg-yellow-400' : 'bg-green-500') : 'bg-gray-800'}`}></div>
-                                ))}
+
+                            {/* Enhanced Password Meter */}
+                            <div className="mt-1 h-1.5 w-full bg-gray-900 rounded-full overflow-hidden flex">
+                                <div
+                                    className={`h-full transition-all duration-500 ${passwordStrength < 2 ? 'bg-red-500' : passwordStrength < 4 ? 'bg-yellow-500' : 'bg-green-500'}`}
+                                    style={{ width: `${(passwordStrength / 4) * 100}%` }}
+                                ></div>
                             </div>
+
                             <div className="flex justify-between text-[9px] text-gray-500 font-mono mt-1 px-1">
                                 <span>ENTROPY: {entropyData.bits} BITS</span>
                                 <span className={entropyData.score < 3 ? 'text-red-500' : 'text-green-500'}>EST. CRACK TIME: {entropyData.crackTime.toUpperCase()}</span>
@@ -1130,26 +1069,7 @@ const App: React.FC = () => {
                 )}
 
                 {/* Log */}
-                <div className="bg-black border-t border-[#00E5FF] border-opacity-20 p-4 font-mono text-xs h-32 overflow-y-auto">
-                    <div className="flex justify-between text-gray-500 mb-2 border-b border-gray-800 pb-1">
-                        <div className="flex gap-2"><Terminal className="w-3 h-3" /> SYSTEM_LOG</div>
-                        <button onClick={handleExportLog} className="flex gap-1 hover:text-[#00E5FF]"><FileDown className="w-3 h-3" /> EXPORT</button>
-                    </div>
-                    <div className="space-y-1 text-[#00E5FF] opacity-80">
-                        {log.map((entry, i) => (
-                            <div key={i} className="flex gap-2 group">
-                                <span className="opacity-50 text-[10px] whitespace-nowrap">{entry.timestamp}</span>
-                                <div className="flex-1 flex justify-between">
-                                    <MatrixText text={entry.text} speed={30} />
-                                    {i === log.length - 1 && (
-                                        <button onClick={() => copyLogMessage(entry.text)} className="opacity-0 group-hover:opacity-100 hover:text-white"><Copy className="w-3 h-3" /></button>
-                                    )}
-                                </div>
-                            </div>
-                        ))}
-                        <div ref={logEndRef} />
-                    </div>
-                </div>
+                <LogViewer log={log} onExport={handleExportLog} onCopy={copyLogMessage} />
 
                 {/* Developer Info Footer */}
                 <div className="p-2 bg-black/50">

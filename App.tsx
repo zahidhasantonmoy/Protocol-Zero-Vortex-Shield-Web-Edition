@@ -1,11 +1,14 @@
 
 import React, { useState, useEffect, useRef } from 'react';
-import { Shield, Lock, Unlock, Eye, Trash2, AlertTriangle, Terminal, FileCode, Loader2, FileText, FileLock, Github, Linkedin, Facebook, Globe, Code, Settings, RotateCcw, X, Clock, Copy, Check, Key, FileArchive, Fingerprint, Info, Dna, FileDown, Type, Save, Image as ImageIcon, Grid, ChevronDown, ScanEye, Flame, ShieldCheck } from 'lucide-react';
+import { Shield, Lock, Unlock, Eye, Trash2, AlertTriangle, Terminal, FileCode, Loader2, FileText, FileLock, Github, Linkedin, Facebook, Globe, Code, Settings, RotateCcw, X, Clock, Copy, Check, Key, FileArchive, Fingerprint, Info, Dna, FileDown, Type, Save, Image as ImageIcon, Grid, ChevronDown, ScanEye, Flame, ShieldCheck, Briefcase } from 'lucide-react';
 import MatrixText from './components/MatrixText';
 import CyberButton from './components/CyberButton';
 import DeveloperInfo from './components/DeveloperInfo';
 import DropZone from './components/DropZone';
 import { CryptoAlgorithm, hashData, CHUNK_SIZE } from './utils/crypto';
+import { formatFileSize } from './utils/formatting';
+import { registerBioLock, authenticateBioLock, isWebAuthnAvailable } from './utils/webauthn';
+import { analyzeEntropy, EntropyResult } from './utils/entropy';
 import { playSound } from './utils/audio';
 
 // Local types for worker communication
@@ -90,12 +93,34 @@ const App: React.FC = () => {
     const [keyFileHash, setKeyFileHash] = useState<string>('');
     const [useCompression, setUseCompression] = useState(false);
     const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+    const [isLocked, setIsLocked] = useState(false);
+    const [bioLockEnabled, setBioLockEnabled] = useState(false);
+    const [theme, setTheme] = useState<'cyberpunk' | 'corporate'>('cyberpunk');
+
+    const tc = theme === 'cyberpunk'
+        ? {
+            text: 'text-[#00E5FF]',
+            bg: 'bg-[#0a0a0a]',
+            border: 'border-[#00E5FF]',
+            bgOp: 'bg-[#00E5FF]/10',
+            hover: 'hover:bg-[#00E5FF]',
+            accent: '#00E5FF'
+        }
+        : {
+            text: 'text-blue-700',
+            bg: 'bg-gray-50',
+            border: 'border-blue-700',
+            bgOp: 'bg-blue-700/10',
+            hover: 'hover:bg-blue-700',
+            accent: '#1d4ed8'
+        };
 
     // Text Vault State
     const [textInput, setTextInput] = useState('');
     const [textMode, setTextMode] = useState<'ENCRYPT' | 'DECRYPT'>('ENCRYPT');
 
     const [passwordStrength, setPasswordStrength] = useState(0);
+    const [entropyData, setEntropyData] = useState<EntropyResult>({ score: 0, bits: 0, crackTime: 'Instant' });
     const [lastOutput, setLastOutput] = useState<string | null>(null);
     const [copySuccess, setCopySuccess] = useState(false);
 
@@ -104,6 +129,7 @@ const App: React.FC = () => {
     const lastActivityRef = useRef<number>(Date.now());
     const processingRef = useRef<boolean>(false);
     const workerRef = useRef<Worker | null>(null);
+    const resetTimerRef = useRef<(force?: boolean) => void>(() => { });
 
     const fakeExtensions = ['.dll', '.sys', '.dat', '.tmp', '.ini', '.bin'];
 
@@ -137,11 +163,11 @@ const App: React.FC = () => {
     }, []);
 
     // Save State
-    const stateRef = useRef({ mode, files, password, algorithm, camouflageMode, camouflageExt, useCompression, textInput });
+    const stateRef = useRef({ mode, files, password, algorithm, camouflageMode, camouflageExt, useCompression, textInput, bioLockEnabled });
 
     useEffect(() => {
-        stateRef.current = { mode, files, password, algorithm, camouflageMode, camouflageExt, useCompression, textInput };
-    }, [mode, files, password, algorithm, camouflageMode, camouflageExt, useCompression, textInput]);
+        stateRef.current = { mode, files, password, algorithm, camouflageMode, camouflageExt, useCompression, textInput, bioLockEnabled };
+    }, [mode, files, password, algorithm, camouflageMode, camouflageExt, useCompression, textInput, bioLockEnabled]);
 
     const saveCurrentState = () => {
         const s = stateRef.current;
@@ -154,12 +180,13 @@ const App: React.FC = () => {
             filesDetails: s.files.map(f => ({ name: f.name, size: f.size })),
             password: s.password,
             textInput: s.textInput,
+            bioLockEnabled: s.bioLockEnabled,
             timestamp: Date.now()
         };
         localStorage.setItem(STORAGE_KEY, JSON.stringify(stateToSave));
     };
 
-    useEffect(() => { saveCurrentState(); }, [mode, algorithm, camouflageMode, camouflageExt, files, password, useCompression, textInput]);
+    useEffect(() => { saveCurrentState(); }, [mode, algorithm, camouflageMode, camouflageExt, files, password, useCompression, textInput, bioLockEnabled]);
     useEffect(() => {
         const interval = setInterval(saveCurrentState, 30000);
         return () => clearInterval(interval);
@@ -212,8 +239,14 @@ const App: React.FC = () => {
     useEffect(() => {
         const handleInactivityTimeout = () => {
             if (processingRef.current) { resetTimer(true); return; }
-            handleKillSwitch();
-            addLog('WARNING: SESSION TIMEOUT.');
+            if (stateRef.current.bioLockEnabled && stateRef.current.password) {
+                setIsLocked(true);
+                addLog('SESSION LOCKED (BIO-GUARD ACTIVE)');
+                playSound('lock');
+            } else {
+                handleKillSwitch();
+                addLog('WARNING: SESSION TIMEOUT.');
+            }
         };
 
         const resetTimer = (force = false) => {
@@ -223,6 +256,8 @@ const App: React.FC = () => {
             if (inactivityTimerRef.current) clearTimeout(inactivityTimerRef.current);
             inactivityTimerRef.current = setTimeout(handleInactivityTimeout, INACTIVITY_LIMIT_MS);
         };
+
+        resetTimerRef.current = resetTimer;
 
         window.addEventListener('mousemove', () => resetTimer());
         window.addEventListener('keydown', () => resetTimer());
@@ -266,7 +301,9 @@ const App: React.FC = () => {
     const handleGeneratePassword = () => {
         const newPass = generateStrongPassword();
         setPassword(newPass);
-        setPasswordStrength(4);
+        const entropy = analyzeEntropy(newPass);
+        setEntropyData(entropy);
+        setPasswordStrength(entropy.score);
         playSound('success');
         addLog('GENERATED HIGH-ENTROPY KEY');
     };
@@ -343,6 +380,37 @@ const App: React.FC = () => {
         }
     };
 
+    const handleBioLockToggle = async () => {
+        if (!bioLockEnabled) {
+            const success = await registerBioLock('User');
+            if (success) {
+                setBioLockEnabled(true);
+                addLog('BIO-LOCK ENABLED');
+                playSound('success');
+            } else {
+                addLog('BIO-LOCK REGISTRATION FAILED');
+                playSound('error');
+            }
+        } else {
+            setBioLockEnabled(false);
+            addLog('BIO-LOCK DISABLED');
+            playSound('click');
+        }
+    };
+
+    const handleUnlock = async () => {
+        const success = await authenticateBioLock();
+        if (success) {
+            setIsLocked(false);
+            addLog('SESSION UNLOCKED');
+            playSound('success');
+            resetTimerRef.current(true);
+        } else {
+            addLog('BIOMETRIC AUTH FAILED');
+            playSound('error');
+        }
+    };
+
     // --- Handlers ---
 
     const handleResumeSession = () => {
@@ -360,6 +428,7 @@ const App: React.FC = () => {
                     setPassword(parsed.password);
                     setPasswordStrength(calculateStrength(parsed.password));
                 }
+                if (parsed.bioLockEnabled) setBioLockEnabled(parsed.bioLockEnabled);
                 setResumeAvailable(false);
                 addLog('> SESSION RESTORED');
                 playSound('success');
@@ -406,7 +475,9 @@ const App: React.FC = () => {
     const handlePasswordChange = (e: React.ChangeEvent<HTMLInputElement>) => {
         const val = e.target.value;
         setPassword(val);
-        setPasswordStrength(calculateStrength(val));
+        const entropy = analyzeEntropy(val);
+        setEntropyData(entropy);
+        setPasswordStrength(entropy.score);
         if (val === 'panic') {
             triggerDuressMode();
         }
@@ -659,15 +730,16 @@ const App: React.FC = () => {
         setIsProcessing(false);
     };
 
+
     // --- Render ---
 
     const renderCoverImageDetail = (file: File) => (
-        <div className="flex items-center justify-between bg-[#00E5FF] bg-opacity-5 border border-[#00E5FF] border-opacity-30 p-2 rounded mt-2">
+        <div className={`flex items-center justify-between ${tc.bgOp} border ${tc.border} border-opacity-30 p-2 rounded mt-2`}>
             <div className="flex items-center gap-2 overflow-hidden">
-                <ImageIcon className="w-4 h-4 text-[#00E5FF]" />
+                <ImageIcon className={`w-4 h-4 ${tc.text}`} />
                 <div className="flex flex-col min-w-0">
-                    <span className="text-xs text-[#00E5FF] font-mono truncate">{file.name}</span>
-                    <span className="text-[10px] text-gray-500">{(file.size / 1024).toFixed(1)} KB</span>
+                    <span className={`text-xs ${tc.text} font-mono truncate`}>{file.name}</span>
+                    <span className="text-[10px] text-gray-500">{formatFileSize(file.size)}</span>
                 </div>
             </div>
             <button onClick={() => setCoverImage(null)} className="text-gray-500 hover:text-red-500 p-1">
@@ -679,12 +751,12 @@ const App: React.FC = () => {
     const renderFileList = () => (
         <div className="space-y-2 max-h-32 overflow-y-auto pr-1 mt-2">
             {files.map((f, i) => (
-                <div key={i} className="flex items-center justify-between bg-gray-900 border border-gray-800 p-2 rounded group hover:border-[#00E5FF] transition-colors">
+                <div key={i} className={`flex items-center justify-between bg-gray-900 border border-gray-800 p-2 rounded group hover:${tc.border} transition-colors`}>
                     <div className="flex items-center gap-2 overflow-hidden">
-                        <FileCode className="w-4 h-4 text-gray-500 group-hover:text-[#00E5FF]" />
+                        <FileCode className={`w-4 h-4 text-gray-500 group-hover:${tc.text}`} />
                         <div className="flex flex-col min-w-0">
                             <span className="text-xs text-gray-300 group-hover:text-white font-mono truncate">{f.name}</span>
-                            <span className="text-[10px] text-gray-600">{(f.size / 1024).toFixed(1)} KB</span>
+                            <span className="text-[10px] text-gray-600">{formatFileSize(f.size)}</span>
                         </div>
                     </div>
                     <button
@@ -766,6 +838,31 @@ const App: React.FC = () => {
         );
     }
 
+    if (isLocked) {
+        return (
+            <div className="min-h-screen bg-black flex flex-col items-center justify-center relative overflow-hidden">
+                <div className="absolute inset-0 bg-[url('https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExbm95bm95bm95bm95bm95bm95bm95bm95bm95bm95bm95bm95/3o7TKs25M2B2hW0e1q/giphy.gif')] opacity-10 bg-cover"></div>
+                <div className="z-10 flex flex-col items-center gap-6 p-8 border border-[#00E5FF] border-opacity-30 bg-black/80 backdrop-blur-md rounded-lg shadow-[0_0_50px_rgba(0,229,255,0.2)]">
+                    <Fingerprint className="w-24 h-24 text-[#00E5FF] animate-pulse" />
+                    <h1 className="text-2xl font-bold text-[#00E5FF] tracking-[0.5em]">BIO-LOCKED</h1>
+                    <p className="text-gray-400 font-mono text-xs">SESSION ENCRYPTED. AUTHENTICATE TO RESUME.</p>
+                    <button
+                        onClick={handleUnlock}
+                        className="px-8 py-3 bg-[#00E5FF]/10 border border-[#00E5FF] text-[#00E5FF] hover:bg-[#00E5FF] hover:text-black transition-all font-bold tracking-widest rounded"
+                    >
+                        SCAN BIOMETRICS
+                    </button>
+                    <button
+                        onClick={handleKillSwitch}
+                        className="text-red-500 text-xs hover:underline mt-4"
+                    >
+                        TERMINATE SESSION
+                    </button>
+                </div>
+            </div>
+        );
+    }
+
     if (duressMode && showFakeSuccess) {
         return (
             <div className="min-h-screen bg-white flex flex-col items-center justify-center text-gray-800 p-8">
@@ -785,17 +882,33 @@ const App: React.FC = () => {
             }}></div>
 
             {/* Main Window */}
-            <div className="w-full max-w-2xl bg-[#0a0a0a] border border-[#00E5FF] border-opacity-30 shadow-[0_0_50px_rgba(0,229,255,0.1)] rounded-sm relative overflow-hidden backdrop-blur-md z-20">
+            <div className={`w-full max-w-2xl ${tc.bg} border ${tc.border} border-opacity-30 shadow-lg rounded-sm relative overflow-hidden backdrop-blur-md z-20 transition-colors duration-500`}>
 
                 {/* Header */}
-                <div className="bg-[#00E5FF] bg-opacity-10 p-3 flex justify-between items-center border-b border-[#00E5FF] border-opacity-20 select-none">
-                    <div className="flex items-center gap-2 text-[#00E5FF]">
+                <div className={`${tc.bgOp} p-3 flex justify-between items-center border-b ${tc.border} border-opacity-20 select-none`}>
+                    <div className={`flex items-center gap-2 ${tc.text}`}>
                         <Shield className="w-5 h-5 animate-pulse" />
-                        <span className="font-bold tracking-widest text-sm">VORTEX SHIELD <span className="text-[10px] opacity-70">CDS_V5.0</span></span>
+                        <span className="font-bold tracking-widest text-sm">{theme === 'cyberpunk' ? 'VORTEX SHIELD' : 'DATA PROTECTOR'} <span className="text-[10px] opacity-70">v5.0</span></span>
                     </div>
 
                     <div className="flex items-center gap-2">
-                        <button onClick={() => setShowAboutModal(true)} className="p-1.5 text-[#00E5FF] hover:bg-[#00E5FF] hover:bg-opacity-20 rounded">
+                        <button
+                            onClick={() => setTheme(prev => prev === 'cyberpunk' ? 'corporate' : 'cyberpunk')}
+                            className={`p-1.5 rounded transition-colors ${tc.text} hover:bg-opacity-20 hover:bg-current`}
+                            title="Toggle Theme"
+                        >
+                            <Briefcase className="w-4 h-4" />
+                        </button>
+                        {isWebAuthnAvailable() && (
+                            <button
+                                onClick={handleBioLockToggle}
+                                className={`p-1.5 rounded transition-colors ${bioLockEnabled ? `${tc.text} ${tc.bgOp}` : 'text-gray-500 hover:text-current'}`}
+                                title={bioLockEnabled ? "Bio-Lock Active" : "Enable Bio-Lock"}
+                            >
+                                <Fingerprint className="w-4 h-4" />
+                            </button>
+                        )}
+                        <button onClick={() => setShowAboutModal(true)} className={`p-1.5 ${tc.text} hover:bg-opacity-20 hover:bg-current rounded`}>
                             <Info className="w-4 h-4" />
                         </button>
                         <div className="flex gap-2 ml-2">
@@ -807,7 +920,7 @@ const App: React.FC = () => {
                 </div>
 
                 {/* Navigation */}
-                <div className="grid grid-cols-5 border-b border-[#00E5FF] border-opacity-20 text-xs sm:text-sm">
+                <div className={`grid grid-cols-5 border-b ${tc.border} border-opacity-20 text-xs sm:text-sm`}>
                     {[
                         { id: AppMode.ENCRYPT, icon: Lock, activeIcon: ShieldCheck, label: 'ENCRYPT' },
                         { id: AppMode.DECRYPT, icon: Unlock, activeIcon: Key, label: 'DECRYPT' },
@@ -831,7 +944,7 @@ const App: React.FC = () => {
                                     setShowConfirmModal(false);
                                     playSound('click');
                                 }}
-                                className={`p-3 flex flex-col items-center gap-1 transition-colors ${mode === item.id ? 'bg-[#00E5FF] text-black font-bold' : 'text-gray-400 hover:text-[#00E5FF] hover:bg-[#00E5FF] hover:bg-opacity-5'}`}
+                                className={`p-3 flex flex-col items-center gap-1 transition-colors ${mode === item.id ? `${tc.bgOp} ${tc.text} font-bold` : `text-gray-400 hover:${tc.text} hover:${tc.bgOp}`}`}
                             >
                                 <Icon className="w-4 h-4" />
                                 {item.label}
@@ -918,9 +1031,10 @@ const App: React.FC = () => {
                                             <button
                                                 key={algo}
                                                 onClick={() => setAlgorithm(algo)}
+
                                                 className={`text-[9px] px-2 py-1 rounded border transition-all ${algorithm === algo
-                                                    ? 'bg-[#00E5FF] text-black border-[#00E5FF] font-bold'
-                                                    : 'border-gray-700 text-gray-500 hover:border-[#00E5FF]'
+                                                    ? `${tc.bgOp} ${tc.text} ${tc.border} font-bold`
+                                                    : `border-gray-700 text-gray-500 hover:${tc.border}`
                                                     }`}
                                             >
                                                 {algo}
@@ -935,13 +1049,13 @@ const App: React.FC = () => {
                             <div className="space-y-3">
                                 <div
                                     onClick={() => setUseCompression(!useCompression)}
-                                    className={`flex items-center justify-between p-2 rounded border cursor-pointer transition-all ${useCompression ? 'bg-[#00E5FF] bg-opacity-10 border-[#00E5FF]' : 'border-gray-800 hover:border-[#00E5FF]'}`}
+                                    className={`flex items-center justify-between p-2 rounded border cursor-pointer transition-all ${useCompression ? `${tc.bgOp} ${tc.border}` : `border-gray-800 hover:${tc.border}`}`}
                                 >
                                     <div className="flex items-center gap-2">
-                                        <FileArchive className={`w-4 h-4 ${useCompression ? 'text-[#00E5FF]' : 'text-gray-500'}`} />
-                                        <span className={`text-xs font-bold ${useCompression ? 'text-[#00E5FF]' : 'text-gray-500'}`}>COMPRESSION</span>
+                                        <FileArchive className={`w-4 h-4 ${useCompression ? tc.text : 'text-gray-500'}`} />
+                                        <span className={`text-xs font-bold ${useCompression ? tc.text : 'text-gray-500'}`}>COMPRESSION</span>
                                     </div>
-                                    <div className={`w-3 h-3 rounded-full ${useCompression ? 'bg-[#00E5FF] shadow-[0_0_8px_#00E5FF]' : 'bg-gray-800'}`}></div>
+                                    <div className={`w-3 h-3 rounded-full ${useCompression ? `${tc.bg} shadow-[0_0_8px_${tc.accent}]` : 'bg-gray-800'}`} style={useCompression ? { backgroundColor: tc.accent } : {}}></div>
                                 </div>
                             </div>
                         )}
@@ -955,16 +1069,20 @@ const App: React.FC = () => {
                                 value={password}
                                 onChange={handlePasswordChange}
                                 placeholder="ENTER SECURE KEY..."
-                                className="w-full bg-black/50 border border-[#00E5FF] border-opacity-30 p-3 pl-10 text-[#00E5FF] focus:outline-none focus:border-[#00E5FF] transition-all placeholder-gray-700 font-mono"
+                                className={`w-full bg-black/50 border ${tc.border} border-opacity-30 p-3 pl-10 ${tc.text} focus:outline-none focus:${tc.border} transition-all placeholder-gray-700 font-mono`}
                             />
-                            <Lock className="absolute left-3 top-3 w-4 h-4 text-[#00E5FF] opacity-30" />
-                            <button onClick={handleGeneratePassword} className="absolute right-2 top-2 p-1 text-[#00E5FF] hover:bg-[#00E5FF] hover:bg-opacity-20 rounded" title="Generate Key">
+                            <Lock className={`absolute left-3 top-3 w-4 h-4 ${tc.text} opacity-30`} />
+                            <button onClick={handleGeneratePassword} className={`absolute right-2 top-2 p-1 ${tc.text} hover:bg-opacity-20 hover:bg-current rounded`} title="Generate Key">
                                 <Dna className="w-4 h-4" />
                             </button>
                             <div className="mt-1 flex gap-1 h-1">
                                 {[1, 2, 3, 4].map((level) => (
                                     <div key={level} className={`flex-1 h-full rounded-sm transition-all ${passwordStrength >= level ? (level === 1 ? 'bg-red-500' : level === 2 ? 'bg-orange-500' : level === 3 ? 'bg-yellow-400' : 'bg-green-500') : 'bg-gray-800'}`}></div>
                                 ))}
+                            </div>
+                            <div className="flex justify-between text-[9px] text-gray-500 font-mono mt-1 px-1">
+                                <span>ENTROPY: {entropyData.bits} BITS</span>
+                                <span className={entropyData.score < 3 ? 'text-red-500' : 'text-green-500'}>EST. CRACK TIME: {entropyData.crackTime.toUpperCase()}</span>
                             </div>
                         </div>
                     )}

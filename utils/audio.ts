@@ -1,7 +1,7 @@
 const AudioContext = window.AudioContext || (window as any).webkitAudioContext;
 const audioCtx = new AudioContext();
 
-export const playSound = (type: 'hover' | 'click' | 'success' | 'error' | 'process') => {
+export const playSound = (type: 'hover' | 'click' | 'success' | 'error' | 'process' | 'lock') => {
   if (audioCtx.state === 'suspended') {
     audioCtx.resume();
   }
@@ -58,6 +58,15 @@ export const playSound = (type: 'hover' | 'click' | 'success' | 'error' | 'proce
       gainNode.gain.exponentialRampToValueAtTime(0.001, now + 0.05);
       oscillator.start(now);
       oscillator.stop(now + 0.05);
+      break;
+    case 'lock':
+      oscillator.type = 'square';
+      oscillator.frequency.setValueAtTime(100, now);
+      oscillator.frequency.linearRampToValueAtTime(50, now + 0.3);
+      gainNode.gain.setValueAtTime(0.2, now);
+      gainNode.gain.linearRampToValueAtTime(0, now + 0.3);
+      oscillator.start(now);
+      oscillator.stop(now + 0.3);
       break;
   }
 };

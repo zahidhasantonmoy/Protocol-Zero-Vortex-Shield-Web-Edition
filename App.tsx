@@ -1034,7 +1034,7 @@ const App: React.FC = () => {
                 </div>
 
                 {/* Developer Info Footer */}
-                <div className="p-4 bg-black/50">
+                <div className="p-2 bg-black/50">
                     <DeveloperInfo />
                 </div>
 

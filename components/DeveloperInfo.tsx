@@ -3,7 +3,7 @@ import { Github, Linkedin, Facebook, Globe, Cpu, Code, Zap } from 'lucide-react'
 
 const DeveloperInfo: React.FC = () => {
     return (
-        <div className="mt-6 border-t border-[#00E5FF] border-opacity-20 pt-4 relative overflow-hidden group">
+        <div className="border-t border-[#00E5FF] border-opacity-20 pt-4 relative overflow-hidden group">
             {/* Animated Background Elements */}
             <div className="absolute inset-0 bg-gradient-to-r from-transparent via-[#00E5FF]/5 to-transparent -translate-x-full group-hover:translate-x-full transition-transform duration-1000 ease-in-out pointer-events-none"></div>
 
